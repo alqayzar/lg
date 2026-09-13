@@ -1,24 +1,28 @@
 import { LogOut } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { clearRoomSession } from '@/features/room/room-session'
 import { PlayerGrid, type LobbyPlayer } from './PlayerGrid'
 import { RoomCodeDialog } from './RoomCodeDialog'
 
 interface LobbyProps {
   currentPlayerId: string
+  onQuit: () => Promise<void>
   players: LobbyPlayer[]
   roomCode: string
 }
 
+export type { LobbyPlayer }
+
 export function Lobby(props: LobbyProps) {
-  const navigate = useNavigate()
+  const [isQuitting, setIsQuitting] = useState(false)
 
   async function quitRoom() {
+    if (isQuitting) return
+    setIsQuitting(true)
     try {
-      await clearRoomSession()
+      await props.onQuit()
     } finally {
-      navigate('/', { replace: true })
+      setIsQuitting(false)
     }
   }
 
@@ -29,11 +33,12 @@ export function Lobby(props: LobbyProps) {
         <RoomCodeDialog roomCode={props.roomCode} />
         <Button
           className="h-9 border border-[#ff4081] px-3 text-sm font-bold text-[#ff4081] hover:bg-[#ff4081] hover:text-white"
+          disabled={isQuitting}
           onClick={quitRoom}
           type="button"
           variant="ghost"
         >
-          <LogOut aria-hidden="true" /> Quitter
+          <LogOut aria-hidden="true" /> {isQuitting ? 'Fermeture...' : 'Quitter'}
         </Button>
       </header>
 

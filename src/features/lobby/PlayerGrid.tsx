@@ -1,7 +1,7 @@
 import { Star, UserRound } from 'lucide-react'
 
 export interface LobbyPlayer {
-  avatarUrl: string | null
+  avatar: string | null
   id: string
   isHost: boolean
   name: string
@@ -28,8 +28,8 @@ export function PlayerGrid(props: PlayerGridProps) {
             />
           )}
           <div className="grid size-14 place-items-center overflow-hidden rounded-full border-2 border-[#7c4dff] bg-[#130e25] text-[#a08ab8]">
-            {player.avatarUrl ? (
-              <img alt="" className="size-full object-cover" src={player.avatarUrl} />
+            {player.avatar ? (
+              <img alt="" className="size-full object-cover" src={player.avatar} />
             ) : (
               <UserRound aria-hidden="true" className="size-6" />
             )}

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:peer": "node peer-server.cjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
@@ -24,6 +25,7 @@
     "cn": "^0.2.6",
     "idb": "^8.0.3",
     "lucide-react": "^1.45.0",
+    "peer": "^1.0.2",
     "peerjs": "^1.5.5",
     "radix-ui": "^1.6.7",
     "react": "^19.3.0",

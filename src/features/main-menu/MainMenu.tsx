@@ -5,7 +5,7 @@ import { JoinRoomDialog } from './JoinRoomDialog'
 import { ProfileEditor } from '@/features/profile/ProfileEditor'
 import { loadProfile, saveProfile } from '@/lib/profile'
 import { createRoomCode } from '@/features/room/room-code'
-import { saveRoomSession } from '@/features/room/room-session'
+import { loadRoomSession, saveRoomSession } from '@/features/room/room-session'
 
 export function MainMenu() {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
@@ -13,18 +13,12 @@ export function MainMenu() {
   const [hasValidName, setHasValidName] = useState(false)
   const navigate = useNavigate()
 
-  async function saveRegisteredProfile(): Promise<boolean> {
-    try {
-      const profile = await loadProfile()
-      await saveProfile({
-        avatar: profile?.avatar ?? null,
-        name: profile?.name.trim() || 'Joueur',
-      })
-      return true
-    } catch {
-      setCreationError('Impossible d’enregistrer votre profil. Réessayez dans un instant.')
-      return false
-    }
+  async function saveRegisteredProfile(): Promise<void> {
+    const profile = await loadProfile()
+    await saveProfile({
+      avatar: profile?.avatar ?? null,
+      name: profile?.name.trim() || 'Joueur',
+    })
   }
 
   async function createRoom() {
@@ -35,18 +29,29 @@ export function MainMenu() {
     setIsCreatingRoom(true)
     setCreationError(null)
 
-    if (!await saveRegisteredProfile()) {
-      setIsCreatingRoom(false)
-      return
-    }
-
     try {
-      await saveRoomSession({ roomCode: createRoomCode() })
+      await saveRegisteredProfile()
+      await saveRoomSession({
+        assignedPlayerIds: [],
+        playerId: crypto.randomUUID(),
+        role: 'host',
+        roomCode: createRoomCode(),
+      })
       navigate('/play')
     } catch {
       setCreationError('Impossible d’enregistrer la partie. Réessayez dans un instant.')
       setIsCreatingRoom(false)
     }
+  }
+
+  async function joinRoom(roomCode: string) {
+    await saveRegisteredProfile()
+    const existingSession = await loadRoomSession()
+    const playerId = existingSession?.role === 'guest' && existingSession.roomCode === roomCode
+      ? existingSession.playerId
+      : undefined
+    await saveRoomSession({ ...(playerId ? { playerId } : {}), role: 'guest', roomCode })
+    navigate('/play')
   }
 
   return (
@@ -75,7 +80,7 @@ export function MainMenu() {
           >
             {isCreatingRoom ? 'Création...' : 'Créer'}
           </Button>
-          <JoinRoomDialog disabled={!hasValidName} />
+          <JoinRoomDialog disabled={!hasValidName} onJoin={joinRoom} />
         </div>
         {creationError && <p className="-mt-4 text-center text-sm font-medium text-[#ff4081]" role="alert">{creationError}</p>}
       </section>

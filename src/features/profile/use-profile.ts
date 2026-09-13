@@ -46,5 +46,5 @@ export function useProfile() {
     void saveProfile({ name, avatar: nextAvatar })
   }
 
-  return { name, avatarUrl, updateName, updateAvatar }
+  return { avatar, avatarUrl, name, updateName, updateAvatar }
 }

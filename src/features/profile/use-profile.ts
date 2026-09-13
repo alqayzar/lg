@@ -5,19 +5,18 @@ export function useProfile() {
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<Blob | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
-  const [isLoaded, setIsLoaded] = useState(false)
   const hasEditedProfile = useRef(false)
 
   useEffect(() => {
     async function restoreProfile() {
       const savedProfile = await loadProfile()
 
-      if (savedProfile && !hasEditedProfile.current) {
-        setName(savedProfile.name)
-        setAvatar(savedProfile.avatar)
+      if (!savedProfile || hasEditedProfile.current) {
+        return
       }
 
-      setIsLoaded(true)
+      setName(savedProfile.name)
+      setAvatar(savedProfile.avatar)
     }
 
     void restoreProfile()
@@ -47,5 +46,5 @@ export function useProfile() {
     void saveProfile({ name, avatar: nextAvatar })
   }
 
-  return { avatar, avatarUrl, isLoaded, name, updateName, updateAvatar }
+  return { name, avatarUrl, updateName, updateAvatar }
 }

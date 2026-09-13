@@ -1,15 +1,16 @@
 import { Star, UserRound } from 'lucide-react'
-import type { RoomPlayer } from '@/features/room/room-protocol'
+import type { NetworkConnection } from '@/features/network/types'
+import type { PlayerMetadata } from '@/features/profile/types'
 
 interface PlayerGridProps {
   currentPeerId: string | null
-  players: RoomPlayer[]
+  connections: NetworkConnection<PlayerMetadata>[]
 }
 
 export function PlayerGrid(props: PlayerGridProps) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,100px))] justify-center gap-3">
-      {props.players.map((connection) => {
+      {props.connections.map((connection) => {
         return (
         <article
           className={`relative flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-[#2d1f55] bg-[#1a1133] px-2 py-3 shadow-[0_0_14px_-4px_#7c4dff] ${connection.peerId === props.currentPeerId ? 'ring-2 ring-[#00e5ff] ring-offset-2 ring-offset-[#0d0a1a]' : ''}`}

@@ -1,493 +1,553 @@
-import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
-import { PeerLink, type LinkOptions } from './peer-link'
-import { createNetworkMessage } from './protocol'
-import type { ConnectionStatus, NetworkClient, NetworkMessage, NetworkSnapshot, TransportEvent, TransportListener } from './types'
+import Peer, { type DataConnection, type PeerError, type PeerOptions } from 'peerjs'
+import { createNetworkMessage, parseNetworkMessage } from './protocol'
+import type {
+  ConnectionStatus,
+  NetworkConnection,
+  NetworkRole,
+  NetworkSnapshot,
+  TransportEvent,
+  TransportListener,
+} from './types'
 
-interface PeerTransportOptions extends Partial<LinkOptions> {
+interface PeerTransportOptions {
+  maxQueuedMessages?: number
+  maxReconnectDelayMs?: number
   peerOptions?: PeerOptions
   reconnectBaseDelayMs?: number
-  maxReconnectDelayMs?: number
-  maxReconnectAttempts?: number
-  startupTimeoutMs?: number
 }
 
-interface Session {
-  id: number
-  role: 'host' | 'guest'
-  hostId: string
-  requestedId?: string
-  mode: 'create' | 'resume' | 'guest'
-  peer: Peer | null
-  signaling: boolean
-  localPeerId: string | null
-  leaving: boolean
-  peerAttempts: number
-  signalAttempts: number
-  linkAttempts: number
-  links: Map<string, PeerLink>
-  pending: Set<PeerLink>
-  guestLink: PeerLink | null
-  metadata: Map<string, object>
-  timers: Map<string, ReturnType<typeof setTimeout>>
-  resolve?: (id: string) => void
-  reject?: (error: Error) => void
-}
+const DEFAULT_MAX_QUEUED_MESSAGES = 50
+const DEFAULT_MAX_RECONNECT_DELAY_MS = 15_000
+const DEFAULT_RECONNECT_BASE_DELAY_MS = 500
 
-const DEFAULTS = {
-  connectionTimeoutMs: 10_000,
-  heartbeatIntervalMs: 5_000,
-  heartbeatTimeoutMs: 30_000,
-  maxBufferedBytes: 16 * 1024 * 1024,
-  reconnectBaseDelayMs: 500,
-  maxReconnectDelayMs: 8_000,
-  maxReconnectAttempts: 10,
-  startupTimeoutMs: 30_000,
-}
-
-const initialSnapshot = (sessionId: number, status: ConnectionStatus): NetworkSnapshot<object> => ({
-  connections: [], connectedPeerIds: [], localPeerId: null, hostPeerId: null,
-  role: null, lastError: null, sessionId, status,
-})
-
-/** Session identity fences every timer, promise, peer and channel callback. */
-export class PeerTransport implements NetworkClient<object> {
-  private readonly options: typeof DEFAULTS & PeerTransportOptions
-  private session: Session | null = null
-  private sequence = 0
+export class PeerTransport {
+  private clientConnection: DataConnection | null = null
+  private connections = new Map<string, DataConnection>()
+  private connectionMetadata = new Map<string, object>()
+  private guestHostId: string | null = null
+  private lastError: string | null = null
+  private localPeerId: string | null = null
   private localMetadata: object = {}
-  private snapshot = initialSnapshot(0, 'idle')
-  private readonly listeners = new Set<TransportListener>()
-  private readonly stateListeners = new Set<() => void>()
+  private outbox: ReturnType<typeof createNetworkMessage>[] = []
+  private peer: Peer | null = null
+  private reconnectAttempt = 0
+  private reconnectTimer: number | null = null
+  private role: NetworkRole = null
+  private status: ConnectionStatus = 'idle'
+  private stopped = false
+  private subscribers = new Set<TransportListener>()
+  private readonly options: PeerTransportOptions
 
-  constructor(options: PeerTransportOptions = {}) {
-    this.options = { ...DEFAULTS, ...options }
+  public constructor(options: PeerTransportOptions = {}) {
+    this.options = options
   }
 
-  getSnapshot = (): NetworkSnapshot<object> => this.snapshot
+  public getSnapshot(): NetworkSnapshot<object> {
+    const connections = this.getConnections()
 
-  subscribe = (listener: TransportListener): (() => void) => {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
-
-  subscribeState = (listener: () => void): (() => void) => {
-    this.stateListeners.add(listener)
-    return () => this.stateListeners.delete(listener)
-  }
-
-  subscribeToMessages = (listener: (message: NetworkMessage, fromPeerId: string) => void): (() => void) => (
-    this.subscribe((event) => {
-      if (event.type === 'message') listener(event.message, event.fromPeerId)
-    })
-  )
-
-  startHost = (hostId: string): Promise<string> => this.start('create', hostId)
-
-  joinHost = (hostId: string, preferredPeerId?: string): Promise<string> => this.start('guest', hostId, preferredPeerId)
-
-  resumeHost = (hostId: string): void => {
-    // Failures are surfaced by the snapshot; no fire-and-forget rejection.
-    void this.start('resume', hostId).catch(() => {})
-  }
-
-  beginLeave = (): void => {
-    const session = this.session
-    if (!session || session.leaving) return
-    session.leaving = true
-    this.clearTimers(session)
-    this.rejectStartup(session, new DOMException('Leaving the session.', 'AbortError'))
-    for (const link of [...session.pending]) link.close()
-    this.publish('leaving')
-  }
-
-  close = (): void => {
-    const session = this.session
-    this.session = null
-    ++this.sequence
-    this.localMetadata = {}
-    if (session) {
-      this.rejectStartup(session, new DOMException('Session closed.', 'AbortError'))
-      this.disposeSession(session)
+    return {
+      connections,
+      connectedPeerIds: this.role === 'guest' && this.clientConnection?.open
+        ? [this.clientConnection.peer]
+        : [...this.connections.keys()],
+      lastError: this.lastError,
+      localPeerId: this.localPeerId,
+      role: this.role,
+      status: this.status,
     }
-    this.removeBrowserListeners()
-    this.snapshot = initialSnapshot(this.sequence, 'closed')
-    this.notify({ type: 'status', status: 'closed' })
   }
 
-  sendToHost = (type: string, payload: unknown): boolean => {
-    const session = this.session
-    return session?.role === 'guest' && !!session.guestLink
-      && this.send(session.guestLink, type, payload)
-  }
-
-  sendToPeer = (peerId: string, type: string, payload: unknown): boolean => {
-    const session = this.session
-    const link = session?.role === 'host' ? session.links.get(peerId) : undefined
-    return !!link && this.send(link, type, payload)
-  }
-
-  broadcast = (type: string, payload: unknown): void => {
-    if (this.session?.role !== 'host') return
-    for (const link of [...this.session.links.values()]) this.send(link, type, payload)
-  }
-
-  disconnectPeer = (peerId: string): boolean => {
-    const link = this.session?.role === 'host' ? this.session.links.get(peerId) : undefined
-    if (!link) return false
-    link.close()
-    return true
-  }
-
-  setLocalMetadata = (metadata: object): void => {
-    if (!this.session || this.session.leaving) return
-    const entries = Object.entries(metadata)
-    const previous = new Map(Object.entries(this.localMetadata))
-    if (entries.length === previous.size && entries.every(([key, value]) => previous.get(key) === value)) return
-    this.localMetadata = { ...metadata }
-    this.publish(this.snapshot.status, { type: 'connections-change' })
-  }
-
-  registerConnectionMetadata = (peerId: string, metadata: object): boolean => {
-    if (this.session?.metadata.has(peerId)) return false
-    return this.updateConnectionMetadata(peerId, metadata)
-  }
-
-  updateConnectionMetadata = (peerId: string, metadata: object): boolean => {
-    const session = this.session
-    if (!session || session.leaving || !session.links.has(peerId)) return false
-    session.metadata.set(peerId, { ...session.metadata.get(peerId), ...metadata })
-    this.publish(this.snapshot.status, { type: 'connections-change' })
-    return true
-  }
-
-  private start(mode: Session['mode'], hostId: string, requestedId?: string): Promise<string> {
-    this.close()
-    const session: Session = {
-      id: ++this.sequence, mode, role: mode === 'guest' ? 'guest' : 'host', hostId, requestedId,
-      peer: null, signaling: false, localPeerId: mode === 'guest' ? null : hostId, leaving: false,
-      peerAttempts: 0, signalAttempts: 0, linkAttempts: 0,
-      links: new Map(), pending: new Set(), guestLink: null, metadata: new Map(), timers: new Map(),
-    }
-    this.session = session
-    this.snapshot = initialSnapshot(session.id, 'starting')
-    this.addBrowserListeners()
-    const result = new Promise<string>((resolve, reject) => {
-      session.resolve = resolve
-      session.reject = reject
-    })
-    this.publish('starting')
-    this.later(session, 'startup', this.options.startupTimeoutMs, () => this.fail(session, new Error('Connection startup timed out.')))
-    this.openPeer(session)
-    return result
-  }
-
-  private openPeer(session: Session): void {
-    if (!this.isActive(session)) return
-    this.dropPeer(session)
-    let peer: Peer
-    try {
-      const id = session.role === 'host' ? session.hostId : session.requestedId
-      peer = id ? new Peer(id, this.options.peerOptions) : new Peer(this.options.peerOptions ?? {})
-      session.peer = peer
-    } catch (error) {
-      this.fail(session, this.toError(error))
+  public setLocalMetadata(metadata: object): void {
+    if (this.hasSameMetadata(this.localMetadata, metadata)) {
       return
     }
-    const current = () => this.isActive(session) && session.peer === peer
-    this.later(session, 'peer-open', this.options.connectionTimeoutMs, () => this.retryPeer(session, new Error('Signaling startup timed out.')))
-    peer.on('open', (id) => {
-      if (!current()) return
-      this.clearTimer(session, 'peer-open')
-      this.clearTimer(session, 'signaling')
-      this.clearTimer(session, 'signal-open')
-      session.signaling = true
-      session.localPeerId = id
-      session.peerAttempts = session.signalAttempts = 0
-      this.snapshot = { ...this.snapshot, lastError: null }
-      if (session.role === 'host') {
-        this.completeStartup(session)
-        this.publish('connected')
-      } else if (!session.guestLink) {
-        this.connectGuest(session)
-      } else {
-        this.publish(session.guestLink.ready ? 'connected' : 'connecting')
-      }
-    })
-    peer.on('connection', (connection) => {
-      if (!current() || session.role !== 'host') connection.close()
-      else this.attachLink(session, connection)
-    })
-    peer.on('call', (call) => call.close())
-    peer.on('disconnected', () => {
-      if (!current()) return
-      session.signaling = false
-      // Losing the signaling socket does not break established WebRTC channels.
-      this.recoverSignaling(session)
-    })
-    peer.on('close', () => {
-      if (current()) this.retryPeer(session, new Error('Signaling peer closed.'))
-    })
-    peer.on('error', (error) => {
-      if (!current()) return
-      if (error.type === 'peer-unavailable' && session.role === 'guest') {
-        if (session.guestLink && !session.guestLink.ready) session.guestLink.close(error)
-        else if (!session.guestLink) this.retryGuest(session, error)
-        return
-      }
-      if (['invalid-id', 'invalid-key', 'browser-incompatible', 'ssl-unavailable'].includes(error.type)
-        || (error.type === 'unavailable-id' && session.mode === 'create')) {
-        this.fail(session, error)
-      } else if (peer.open || peer.disconnected && session.localPeerId) {
-        session.signaling = false
-        this.recordError(error)
-        this.recoverSignaling(session)
-      } else {
-        this.retryPeer(session, error)
-      }
-    })
+
+    this.localMetadata = { ...metadata }
+    this.emit({ type: 'connections-change' })
   }
 
-  private connectGuest(session: Session): void {
-    if (!this.isActive(session) || !session.peer || !session.signaling || session.guestLink) return
-    this.clearTimer(session, 'guest-retry')
-    this.publish(session.linkAttempts ? 'reconnecting' : 'connecting')
+  public updateConnectionMetadata(peerId: string, metadata: object): boolean {
+    if (!this.connections.has(peerId)) {
+      return false
+    }
+
+    this.connectionMetadata.set(peerId, {
+      ...this.connectionMetadata.get(peerId),
+      ...metadata,
+    })
+    this.emit({ type: 'connections-change' })
+    return true
+  }
+
+  public subscribe(listener: TransportListener): () => void {
+    this.subscribers.add(listener)
+    return () => this.subscribers.delete(listener)
+  }
+
+  public async startHost(roomId: string): Promise<string> {
+    this.reset()
+    this.role = 'host'
+    this.stopped = false
+    this.setStatus('starting')
+
     try {
-      // Only the data channel is negotiated here. Application info is a message.
-      this.attachLink(session, session.peer.connect(session.hostId, { reliable: true }))
+      const peerId = await this.openPeer(roomId)
+      this.setStatus('connected')
+      return peerId
     } catch (error) {
-      this.retryGuest(session, this.toError(error))
+      this.fail(error)
+      throw error
     }
   }
 
-  private attachLink(session: Session, connection: DataConnection): void {
-    const link = new PeerLink(connection, this.options, {
-      open: () => {
-        if (!this.isActive(session) || !session.pending.has(link)) {
-          link.close()
+  public async joinHost(hostId: string, preferredPeerId?: string): Promise<string> {
+    this.reset()
+    this.role = 'guest'
+    this.guestHostId = hostId
+    this.stopped = false
+    this.setStatus('starting')
+
+    try {
+      let peerId: string
+
+      try {
+        peerId = await this.openPeer(preferredPeerId)
+      } catch (error) {
+        if (!preferredPeerId || !this.isUnavailableIdError(error)) {
+          throw error
+        }
+
+        this.destroyPeer()
+        peerId = await this.openPeer()
+      }
+
+      this.connectGuestToHost()
+      return peerId
+    } catch (error) {
+      this.fail(error)
+      throw error
+    }
+  }
+
+  public resumeHost(roomId: string): void {
+    this.reset()
+    this.role = 'host'
+    this.stopped = false
+    this.localPeerId = roomId
+    this.setStatus('starting')
+    this.tryResumeHost(roomId)
+  }
+
+  public sendToHost(type: string, payload: unknown): boolean {
+    if (this.role !== 'guest') {
+      return false
+    }
+
+    const message = createNetworkMessage(type, payload)
+    const connection = this.clientConnection
+
+    if (connection?.open) {
+      return this.send(connection, message)
+    }
+
+    this.queueMessage(message)
+    return true
+  }
+
+  public sendToPeer(peerId: string, type: string, payload: unknown): boolean {
+    if (this.role !== 'host') {
+      return false
+    }
+
+    const connection = this.connections.get(peerId)
+    return connection ? this.send(connection, createNetworkMessage(type, payload)) : false
+  }
+
+  public broadcast(type: string, payload: unknown): void {
+    if (this.role !== 'host') {
+      return
+    }
+
+    const message = createNetworkMessage(type, payload)
+    for (const connection of this.connections.values()) {
+      this.send(connection, message)
+    }
+  }
+
+  public close(): void {
+    this.stopped = true
+    this.clearReconnectTimer()
+    this.outbox = []
+    this.closeConnections()
+    this.destroyPeer()
+    this.guestHostId = null
+    this.localPeerId = null
+    this.role = null
+    this.lastError = null
+    this.setStatus('closed')
+  }
+
+  private async openPeer(requestedPeerId?: string): Promise<string> {
+    const peer = requestedPeerId
+      ? new Peer(requestedPeerId, this.options.peerOptions)
+      : this.options.peerOptions
+        ? new Peer(this.options.peerOptions)
+        : new Peer()
+
+    this.peer = peer
+
+    return new Promise((resolve, reject) => {
+      let opened = false
+
+      peer.on('open', (peerId) => {
+        if (peer !== this.peer) {
           return
         }
-        session.pending.delete(link)
-        const previous = session.links.get(link.peerId)
-        // Install the replacement BEFORE closing the old channel.
-        session.links.set(link.peerId, link)
-        session.metadata.delete(link.peerId)
-        previous?.close()
-        if (session.role === 'guest') {
-          session.linkAttempts = 0
-          this.clearTimer(session, 'guest-retry')
-          this.completeStartup(session)
+
+        opened = true
+        this.localPeerId = peerId
+        this.lastError = null
+        this.reconnectAttempt = 0
+        resolve(peerId)
+      })
+
+      peer.on('connection', (connection) => {
+        if (peer === this.peer && this.role === 'host') {
+          this.attachHostConnection(connection)
         }
-        this.snapshot = { ...this.snapshot, lastError: null }
-        this.publish(this.connectionStatus(session), { type: 'connection-open', peerId: link.peerId })
-      },
-      message: (message) => {
-        if (this.session !== session || session.links.get(link.peerId) !== link) return
-        this.emit({ type: 'message', fromPeerId: link.peerId, message })
-      },
-      close: (error) => {
-        if (this.session !== session) return
-        const wasActive = session.links.get(link.peerId) === link
-        session.pending.delete(link)
-        if (wasActive) {
-          session.links.delete(link.peerId)
-          session.metadata.delete(link.peerId)
+      })
+
+      peer.on('disconnected', () => {
+        if (peer === this.peer && !this.stopped) {
+          this.handlePeerDisconnect(peer)
         }
-        const wasGuest = session.guestLink === link
-        if (wasGuest) session.guestLink = null
-        if (wasActive) this.publish(this.connectionStatus(session), { type: 'connection-close', peerId: link.peerId })
-        if (wasGuest && !session.leaving) this.retryGuest(session, error)
-      },
+      })
+
+      peer.on('close', () => {
+        if (peer === this.peer && !this.stopped) {
+          this.setStatus('offline')
+        }
+      })
+
+      peer.on('error', (error) => {
+        if (peer !== this.peer) {
+          return
+        }
+
+        if (!opened) {
+          reject(error)
+          return
+        }
+
+        this.handlePeerError(error)
+      })
     })
-    session.pending.add(link)
-    if (session.role === 'guest') session.guestLink = link
   }
 
-  private recoverSignaling(session: Session): void {
-    if (!this.isActive(session) || session.timers.has('signaling') || session.timers.has('signal-open')) return
-    if (++session.signalAttempts > this.options.maxReconnectAttempts) {
-      this.fail(session, new Error('Signaling reconnection failed.'))
-      return
-    }
-    this.publish(this.connectionStatus(session))
-    this.later(session, 'signaling', this.backoff(session.signalAttempts), () => {
-      const peer = session.peer
-      if (!peer || peer.destroyed) {
-        this.retryPeer(session)
+  private attachHostConnection(connection: DataConnection): void {
+    connection.on('open', () => {
+      if (this.stopped) {
+        connection.close()
         return
       }
-      this.later(session, 'signal-open', this.options.connectionTimeoutMs, () => {
-        this.recoverSignaling(session)
-      })
-      try {
-        if (peer.disconnected) peer.reconnect()
-      } catch (error) {
-        this.recordError(this.toError(error))
-        this.clearTimer(session, 'signal-open')
-        this.recoverSignaling(session)
+
+      this.connections.get(connection.peer)?.close()
+      this.connections.set(connection.peer, connection)
+      this.connectionMetadata.set(connection.peer, this.asMetadata(connection.metadata))
+      this.attachMessageListener(connection)
+      this.emit({ type: 'connection-open', peerId: connection.peer })
+    })
+
+    connection.on('close', () => {
+      if (this.connections.get(connection.peer) !== connection) {
+        return
       }
+
+      this.connections.delete(connection.peer)
+      this.connectionMetadata.delete(connection.peer)
+      this.emit({ type: 'connection-close', peerId: connection.peer })
+    })
+
+    connection.on('error', (error) => this.emit({ type: 'error', error }))
+  }
+
+  private attachMessageListener(connection: DataConnection): void {
+    connection.on('data', (rawMessage) => {
+      const message = parseNetworkMessage(rawMessage)
+
+      if (!message) {
+        this.emit({ type: 'error', error: new Error(`Ignored invalid message from ${connection.peer}.`) })
+        return
+      }
+
+      this.emit({ type: 'message', fromPeerId: connection.peer, message })
     })
   }
 
-  private retryPeer(session: Session, error?: Error): void {
-    if (!this.isActive(session) || session.timers.has('peer-retry')) return
-    this.dropPeer(session)
-    if (++session.peerAttempts > this.options.maxReconnectAttempts) {
-      this.fail(session, error ?? new Error('Peer reconnection failed.'))
+  private connectGuestToHost(): void {
+    if (!this.peer || !this.guestHostId || this.stopped) {
       return
     }
-    if (error) this.recordError(error)
-    this.publish('reconnecting')
-    this.later(session, 'peer-retry', this.backoff(session.peerAttempts), () => this.openPeer(session))
+
+    this.clearReconnectTimer()
+    const previousConnection = this.clientConnection
+    this.clientConnection = null
+    previousConnection?.close()
+    this.setStatus(this.reconnectAttempt > 0 ? 'reconnecting' : 'connecting')
+
+    const connection = this.peer.connect(this.guestHostId, {
+      metadata: this.localMetadata,
+      reliable: true,
+    })
+    this.clientConnection = connection
+    this.attachMessageListener(connection)
+
+    connection.on('open', () => {
+      if (connection !== this.clientConnection || this.stopped) {
+        connection.close()
+        return
+      }
+
+      this.reconnectAttempt = 0
+      this.setStatus('connected')
+      this.flushOutbox(connection)
+      this.emit({ type: 'connection-open', peerId: connection.peer })
+    })
+
+    connection.on('close', () => {
+      if (connection !== this.clientConnection || this.stopped) {
+        return
+      }
+
+      this.clientConnection = null
+      this.emit({ type: 'connection-close', peerId: connection.peer })
+      this.scheduleGuestReconnect()
+    })
+
+    connection.on('error', (error) => {
+      if (connection !== this.clientConnection) {
+        return
+      }
+
+      this.emit({ type: 'error', error })
+      this.scheduleGuestReconnect()
+    })
   }
 
-  private retryGuest(session: Session, error?: Error): void {
-    if (!this.isActive(session) || session.guestLink || session.timers.has('guest-retry')) return
-    if (++session.linkAttempts > this.options.maxReconnectAttempts) {
-      this.fail(session, error ?? new Error('Host is unavailable.'))
+  private tryResumeHost(roomId: string): void {
+    if (this.stopped || this.role !== 'host') {
       return
     }
-    if (error) this.recordError(error)
-    this.publish('reconnecting')
-    this.later(session, 'guest-retry', this.backoff(session.linkAttempts), () => this.connectGuest(session))
+
+    void this.openPeer(roomId)
+      .then(() => {
+        this.reconnectAttempt = 0
+        this.setStatus('connected')
+      })
+      .catch((error) => {
+        this.destroyPeer()
+        this.emit({ type: 'error', error: this.toError(error) })
+        this.scheduleHostResume(roomId)
+      })
   }
 
-  private completeStartup(session: Session): void {
-    this.clearTimer(session, 'startup')
-    session.resolve?.(session.localPeerId!)
-    session.resolve = session.reject = undefined
+  private handlePeerDisconnect(peer: Peer): void {
+    this.setStatus('reconnecting')
+
+    try {
+      peer.reconnect()
+    } catch (error) {
+      this.emit({ type: 'error', error: this.toError(error) })
+    }
+
+    if (this.role === 'guest') {
+      this.scheduleGuestReconnect()
+    }
   }
 
-  private rejectStartup(session: Session, error: Error): void {
-    session.reject?.(error)
-    session.resolve = session.reject = undefined
+  private handlePeerError(error: PeerError<string>): void {
+    if (this.role === 'guest' && !this.stopped) {
+      this.emit({ type: 'error', error })
+      this.scheduleGuestReconnect()
+      return
+    }
+
+    this.fail(error)
   }
 
-  private fail(session: Session, error: Error): void {
-    if (!this.isActive(session)) return
-    // Keep the session identity for the owner to see failure and explicitly leave.
-    session.leaving = true
-    this.rejectStartup(session, error)
-    this.disposeSession(session)
-    this.removeBrowserListeners()
-    this.snapshot = { ...this.snapshot, lastError: error.message }
-    this.publish('error', { type: 'error', error })
+  private scheduleGuestReconnect(): void {
+    if (this.stopped || this.role !== 'guest' || this.reconnectTimer !== null) {
+      return
+    }
+
+    this.reconnectAttempt += 1
+    this.setStatus('reconnecting')
+
+    const baseDelay = this.options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS
+    const maxDelay = this.options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS
+    const delay = Math.min(baseDelay * 2 ** (this.reconnectAttempt - 1), maxDelay)
+    const jitter = Math.round(delay * (Math.random() * 0.2 - 0.1))
+
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      this.connectGuestToHost()
+    }, delay + jitter)
   }
 
-  private dropPeer(session: Session): void {
-    this.clearTimer(session, 'peer-open')
-    this.clearTimer(session, 'signaling')
-    this.clearTimer(session, 'signal-open')
-    this.clearTimer(session, 'guest-retry')
-    const peer = session.peer
-    session.peer = null
-    session.signaling = false
-    session.guestLink = null
-    const links = new Set([...session.pending, ...session.links.values()])
-    const ids = [...session.links.keys()]
-    session.links.clear()
-    session.pending.clear()
-    session.metadata.clear()
-    peer?.removeAllListeners()
-    for (const link of links) link.close()
+  private scheduleHostResume(roomId: string): void {
+    if (this.stopped || this.role !== 'host' || this.reconnectTimer !== null) {
+      return
+    }
+
+    this.reconnectAttempt += 1
+    this.setStatus('reconnecting')
+
+    const baseDelay = this.options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS
+    const maxDelay = this.options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_DELAY_MS
+    const delay = Math.min(baseDelay * 2 ** (this.reconnectAttempt - 1), maxDelay)
+    const jitter = Math.round(delay * (Math.random() * 0.2 - 0.1))
+
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null
+      this.tryResumeHost(roomId)
+    }, delay + jitter)
+  }
+
+  private flushOutbox(connection: DataConnection): void {
+    const queuedMessages = this.outbox
+    this.outbox = []
+
+    for (const message of queuedMessages) {
+      if (!this.send(connection, message)) {
+        this.queueMessage(message)
+        break
+      }
+    }
+  }
+
+  private queueMessage(message: ReturnType<typeof createNetworkMessage>): void {
+    const maxQueuedMessages = this.options.maxQueuedMessages ?? DEFAULT_MAX_QUEUED_MESSAGES
+    if (this.outbox.length >= maxQueuedMessages) {
+      this.outbox.shift()
+    }
+    this.outbox.push(message)
+  }
+
+  private send(connection: DataConnection, message: ReturnType<typeof createNetworkMessage>): boolean {
+    if (!connection.open) {
+      return false
+    }
+
+    try {
+      connection.send(message)
+      return true
+    } catch (error) {
+      this.emit({ type: 'error', error: this.toError(error) })
+      return false
+    }
+  }
+
+  private reset(): void {
+    this.stopped = true
+    this.clearReconnectTimer()
+    this.outbox = []
+    this.closeConnections()
+    this.destroyPeer()
+    this.guestHostId = null
+    this.localPeerId = null
+    this.lastError = null
+    this.role = null
+  }
+
+  private closeConnections(): void {
+    this.clientConnection?.close()
+    this.clientConnection = null
+
+    for (const connection of this.connections.values()) {
+      connection.close()
+    }
+    this.connections.clear()
+    this.connectionMetadata.clear()
+  }
+
+  private destroyPeer(): void {
+    const peer = this.peer
+    this.peer = null
     peer?.destroy()
-    if (this.session === session) {
-      for (const peerId of ids) this.publish(this.connectionStatus(session), { type: 'connection-close', peerId })
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) {
+      return
     }
+
+    window.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
   }
 
-  private disposeSession(session: Session): void {
-    this.clearTimers(session)
-    this.dropPeer(session)
+  private fail(error: unknown): void {
+    const normalizedError = this.toError(error)
+    this.lastError = normalizedError.message
+    this.emit({ type: 'error', error: normalizedError })
+    this.setStatus('error')
   }
 
-  private isActive(session: Session): boolean {
-    return this.session === session && !session.leaving
-  }
-
-  private send(link: PeerLink, type: string, payload: unknown): boolean {
-    return !type.startsWith('$network/') && link.send(createNetworkMessage(type, payload))
-  }
-
-  private connectionStatus(session: Session): ConnectionStatus {
-    if (session.leaving) return 'leaving'
-    return (session.role === 'host' ? session.signaling : session.guestLink?.ready) ? 'connected' : 'reconnecting'
-  }
-
-  private publish(status: ConnectionStatus, event: TransportEvent = { type: 'status', status }): void {
-    const session = this.session
-    if (!session) return
-    this.snapshot = {
-      ...this.snapshot, status, sessionId: session.id, role: session.role,
-      localPeerId: session.localPeerId, hostPeerId: session.hostId,
-      connectedPeerIds: [...session.links.keys()],
-      connections: [
-        ...(session.localPeerId ? [{ peerId: session.localPeerId, isHost: session.role === 'host', metadata: this.localMetadata }] : []),
-        ...[...session.links.keys()].map((peerId) => ({
-          peerId, isHost: session.role === 'guest', metadata: session.metadata.get(peerId) ?? {},
-        })),
-      ],
+  private setStatus(status: ConnectionStatus): void {
+    if (this.status === status) {
+      return
     }
-    this.notify(event)
-  }
 
-  private notify(event: TransportEvent): void {
-    for (const listener of this.stateListeners) listener()
-    this.emit(event)
+    this.status = status
+    this.emit({ type: 'status', status })
   }
 
   private emit(event: TransportEvent): void {
-    for (const listener of [...this.listeners]) {
-      try { listener(event) } catch (error) { console.error('Network subscriber failed.', error) }
+    if (event.type === 'error') {
+      this.lastError = event.error.message
+    }
+
+    for (const listener of this.subscribers) {
+      listener(event)
     }
   }
 
-  private recordError(error: Error): void {
-    this.snapshot = { ...this.snapshot, lastError: error.message }
+  private getConnections(): NetworkConnection<object>[] {
+    const localConnection = this.localPeerId
+      ? [{
+          isHost: this.role === 'host',
+          metadata: this.localMetadata,
+          peerId: this.localPeerId,
+        }]
+      : []
+    const remoteConnections = this.role === 'guest' && this.clientConnection?.open
+      ? [{ isHost: true, metadata: {}, peerId: this.clientConnection.peer }]
+      : [...this.connections.keys()].map((peerId) => ({
+          isHost: false,
+          metadata: this.connectionMetadata.get(peerId) ?? {},
+          peerId,
+        }))
+
+    return [...localConnection, ...remoteConnections]
   }
 
-  private later(session: Session, name: string, delay: number, action: () => void): void {
-    this.clearTimer(session, name)
-    session.timers.set(name, setTimeout(() => {
-      session.timers.delete(name)
-      if (this.isActive(session)) action()
-    }, delay))
+  private asMetadata(value: unknown): object {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? { ...(value as object) }
+      : {}
   }
 
-  private clearTimer(session: Session, name: string): void {
-    clearTimeout(session.timers.get(name))
-    session.timers.delete(name)
+  private hasSameMetadata(first: object, second: object): boolean {
+    const firstEntries = Object.entries(first)
+    const secondEntries = Object.entries(second)
+
+    return firstEntries.length === secondEntries.length
+      && firstEntries.every(([key, value]) => secondEntries.some(
+        ([secondKey, secondValue]) => key === secondKey && value === secondValue,
+      ))
   }
 
-  private clearTimers(session: Session): void {
-    for (const timer of session.timers.values()) clearTimeout(timer)
-    session.timers.clear()
-  }
-
-  private backoff(attempt: number): number {
-    return Math.min(this.options.maxReconnectDelayMs, this.options.reconnectBaseDelayMs * 2 ** Math.min(attempt - 1, 16))
-      * (0.9 + Math.random() * 0.2)
-  }
-
-  private onOnline = (): void => {
-    const session = this.session
-    if (!session || !this.isActive(session)) return
-    if (!session.peer) this.openPeer(session)
-    else if (!session.signaling) this.recoverSignaling(session)
-    else if (session.role === 'guest' && !session.guestLink) this.connectGuest(session)
-  }
-
-  private onPageHide = (): void => this.close()
-
-  private addBrowserListeners(): void {
-    if (typeof window === 'undefined') return
-    window.addEventListener('online', this.onOnline)
-    window.addEventListener('pagehide', this.onPageHide)
-  }
-
-  private removeBrowserListeners(): void {
-    if (typeof window === 'undefined') return
-    window.removeEventListener('online', this.onOnline)
-    window.removeEventListener('pagehide', this.onPageHide)
+  private isUnavailableIdError(error: unknown): boolean {
+    return error instanceof Error && 'type' in error && error.type === 'unavailable-id'
   }
 
   private toError(error: unknown): Error {

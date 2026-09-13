@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { useNetwork } from '@/features/network/NetworkProvider'
 import { JoinRoomDialog } from './JoinRoomDialog'
@@ -7,108 +7,70 @@ import { ProfileEditor } from '@/features/profile/ProfileEditor'
 import type { PlayerMetadata } from '@/features/profile/types'
 import { loadProfile, saveProfile } from '@/lib/profile'
 import { createRoomCode, roomCodeToPeerId } from '@/features/room/room-code'
-import { clearRoomSession, saveRoomSession, type HostRoomSession } from '@/features/room/room-session'
-import { createRoomToken } from '@/features/room/room-token'
+import { saveRoomSession } from '@/features/room/room-session'
 
 const MAX_ROOM_CREATION_ATTEMPTS = 5
 
-interface EntryAttempt {
-  generation: number
-  handedOff: boolean
-  savedSession: HostRoomSession | null
-  sessionId: number | null
-}
-
 export function MainMenu() {
-  const [pendingEntry, setPendingEntry] = useState<'create' | 'join' | null>(null)
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [creationError, setCreationError] = useState<string | null>(null)
   const [hasValidName, setHasValidName] = useState(false)
-  const generation = useRef(0)
-  const attemptRef = useRef<EntryAttempt | null>(null)
-  const location = useLocation()
   const navigate = useNavigate()
-  const { client } = useNetwork<PlayerMetadata>()
+  const network = useNetwork<PlayerMetadata>()
 
-  useEffect(() => () => {
-    generation.current += 1
-    const attempt = attemptRef.current
-    attemptRef.current = null
-    if (attempt && !attempt.handedOff) {
-      if (attempt.sessionId !== null && client.getSnapshot().sessionId === attempt.sessionId) client.close()
-      if (attempt.savedSession) void clearRoomSession(attempt.savedSession.sessionKey).catch(() => {})
-    }
-  }, [client])
-
-  async function enterRoom(guestRoomCode?: string) {
-    if (attemptRef.current || !hasValidName) return
-    const attempt: EntryAttempt = {
-      generation: ++generation.current,
-      handedOff: false,
-      savedSession: null,
-      sessionId: null,
-    }
-    attemptRef.current = attempt
-    const isCurrent = () => attemptRef.current === attempt && generation.current === attempt.generation
-    const ownsTransport = () => attempt.sessionId !== null && client.getSnapshot().sessionId === attempt.sessionId
-    setPendingEntry(guestRoomCode ? 'join' : 'create')
-    setCreationError(null)
-
+  async function saveRegisteredProfile(): Promise<boolean> {
     try {
       const profile = await loadProfile()
-      if (!isCurrent()) return
-      const name = profile?.name.trim()
-      if (!name || name.length > 20) throw new Error('Choisissez un pseudo de 1 a 20 caracteres.')
-      await saveProfile({ avatar: profile?.avatar ?? null, name })
-      if (!isCurrent()) return
-
-      if (guestRoomCode) {
-        attempt.handedOff = true
-        navigate(`/play?room=${guestRoomCode}`)
-        return
-      }
-
-      for (let reservation = 0; reservation < MAX_ROOM_CREATION_ATTEMPTS; reservation += 1) {
-        const roomCode = createRoomCode()
-        const peerId = roomCodeToPeerId(roomCode)
-        try {
-          const opening = client.startHost(peerId)
-          attempt.sessionId = client.getSnapshot().sessionId
-          await opening
-        } catch (error) {
-          if (!isCurrent() || !ownsTransport()) return
-          if (error instanceof Error && error.name === 'AbortError') throw error
-          // A generated peer ID can already be reserved.
-          continue
-        }
-        if (!isCurrent() || !ownsTransport()) return
-        const session: HostRoomSession = {
-          connectedPeerIds: [], peerId, role: 'host', roomCode, sessionKey: createRoomToken(),
-        }
-        attempt.savedSession = session
-        await saveRoomSession(session, () => isCurrent() && ownsTransport())
-        if (!isCurrent() || !ownsTransport()) return
-        attempt.handedOff = true
-        navigate('/play')
-        return
-      }
-      throw new Error('Impossible de creer une partie. Reessayez dans un instant.')
-    } catch (error) {
-      if (isCurrent()) {
-        setCreationError(error instanceof Error ? error.message : 'Impossible de preparer la partie.')
-      }
-    } finally {
-      if (!attempt.handedOff) {
-        // Never let completion of an obsolete attempt close a newer session.
-        if (ownsTransport()) client.close()
-        if (attempt.savedSession) {
-          await clearRoomSession(attempt.savedSession.sessionKey).catch(() => {})
-        }
-        if (isCurrent()) {
-          attemptRef.current = null
-          setPendingEntry(null)
-        }
-      }
+      await saveProfile({
+        avatar: profile?.avatar ?? null,
+        name: profile?.name.trim() || 'Joueur',
+      })
+      return true
+    } catch {
+      setCreationError('Impossible d’enregistrer votre profil. Réessayez dans un instant.')
+      return false
     }
+  }
+
+  async function createRoom() {
+    if (isCreatingRoom || !hasValidName) {
+      return
+    }
+
+    setIsCreatingRoom(true)
+    setCreationError(null)
+
+    if (!await saveRegisteredProfile()) {
+      setIsCreatingRoom(false)
+      return
+    }
+
+    for (let attempt = 0; attempt < MAX_ROOM_CREATION_ATTEMPTS; attempt += 1) {
+      const roomCode = createRoomCode()
+      const peerId = roomCodeToPeerId(roomCode)
+
+      try {
+        await network.startHost(peerId)
+      } catch {
+        // A generated peer ID can be occupied; retry with a new code.
+        continue
+      }
+
+      try {
+        await saveRoomSession({ peerId, role: 'host', roomCode })
+      } catch {
+        network.close()
+        setCreationError('Impossible d’enregistrer la partie. Réessayez dans un instant.')
+        setIsCreatingRoom(false)
+        return
+      }
+
+      navigate('/play')
+      return
+    }
+
+    setCreationError('Impossible de créer une partie. Réessayez dans un instant.')
+    setIsCreatingRoom(false)
   }
 
   return (
@@ -125,22 +87,21 @@ export function MainMenu() {
           </p>
         </header>
 
-        <ProfileEditor disabled={pendingEntry !== null} onNameValidityChange={setHasValidName} />
+        <ProfileEditor onNameValidityChange={setHasValidName} />
 
         <div className="flex w-full gap-4">
           <Button
             className="h-12 flex-1 rounded-xl bg-[#00e5ff] text-sm font-bold tracking-[0.05em] text-[#0a0616] uppercase shadow-[0_4px_18px_rgba(0,229,255,0.35)] hover:bg-[#00e5ff] hover:shadow-[0_4px_26px_rgba(0,229,255,0.55)]"
-            disabled={pendingEntry !== null || !hasValidName}
-            onClick={() => { void enterRoom() }}
+            disabled={isCreatingRoom || !hasValidName}
+            onClick={createRoom}
             size="lg"
             type="button"
           >
-            {pendingEntry === 'create' ? 'Création...' : 'Créer'}
+            {isCreatingRoom ? 'Création...' : 'Créer'}
           </Button>
-          <JoinRoomDialog disabled={pendingEntry !== null || !hasValidName} error={creationError} isJoining={pendingEntry === 'join'} onJoin={(roomCode) => { void enterRoom(roomCode) }} />
+          <JoinRoomDialog disabled={!hasValidName} />
         </div>
         {creationError && <p className="-mt-4 text-center text-sm font-medium text-[#ff4081]" role="alert">{creationError}</p>}
-        {!creationError && typeof location.state?.roomError === 'string' && <p className="-mt-4 text-center text-sm font-medium text-[#ff4081]" role="alert">{location.state.roomError}</p>}
       </section>
     </main>
   )

@@ -8,10 +8,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { useNetwork } from '@/features/network/NetworkProvider'
 import { useProfile } from './use-profile'
+import type { PlayerMetadata } from './types'
 
 interface ProfileEditorProps {
-  disabled?: boolean
   onNameValidityChange(isValid: boolean): void
 }
 
@@ -19,12 +20,20 @@ export function ProfileEditor(props: ProfileEditorProps) {
   const [isAvatarDialogOpen, setIsAvatarDialogOpen] = useState(false)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const galleryInputRef = useRef<HTMLInputElement>(null)
+  const network = useNetwork<PlayerMetadata>()
   const profile = useProfile()
-  const hasValidName = profile.isLoaded && profile.name.trim().length > 0
+  const hasValidName = profile.name.trim().length > 0
 
   useEffect(() => {
     props.onNameValidityChange(hasValidName)
   }, [hasValidName, props.onNameValidityChange])
+
+  useEffect(() => {
+    network.setLocalMetadata({
+      avatarUrl: profile.avatarUrl,
+      name: profile.name.trim() || 'Joueur',
+    })
+  }, [network, profile.avatarUrl, profile.name])
 
   function handleNameChange(event: ChangeEvent<HTMLInputElement>) {
     profile.updateName(event.target.value)
@@ -60,7 +69,6 @@ export function ProfileEditor(props: ProfileEditorProps) {
         <Button
           aria-label="Choisir une photo de profil"
           className="group relative size-[88px] overflow-hidden rounded-full border-2 border-dashed border-[#2d1f55] bg-[#1a1133] text-[2.2rem] transition-colors hover:border-solid hover:border-[#7c4dff]"
-          disabled={props.disabled}
           onClick={openAvatarDialog}
           size="icon"
           type="button"
@@ -95,7 +103,6 @@ export function ProfileEditor(props: ProfileEditorProps) {
         accept="image/*"
         capture="environment"
         className="sr-only"
-        disabled={props.disabled}
         onChange={handleAvatarChange}
         ref={cameraInputRef}
         type="file"
@@ -103,7 +110,6 @@ export function ProfileEditor(props: ProfileEditorProps) {
       <input
         accept="image/*"
         className="sr-only"
-        disabled={props.disabled}
         onChange={handleAvatarChange}
         ref={galleryInputRef}
         type="file"
@@ -113,7 +119,6 @@ export function ProfileEditor(props: ProfileEditorProps) {
         aria-label="Pseudo"
         autoComplete="off"
         className="h-12 rounded-xl border-2 border-[#2d1f55] bg-[#1c1535] px-4 text-base text-[#f0e6ff] placeholder:text-[#4a3d6b] focus-visible:border-[#7c4dff] focus-visible:ring-[3px] focus-visible:ring-[#7c4dff]/20"
-        disabled={props.disabled}
         maxLength={20}
         onChange={handleNameChange}
         placeholder="Ton pseudo..."

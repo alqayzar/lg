@@ -1,8 +1,6 @@
 import { openDB } from 'idb'
 
 export interface HostRoomSession {
-  peerId: string
-  role: 'host'
   roomCode: string
 }
 

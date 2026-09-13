@@ -1,26 +1,24 @@
 import { LogOut } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { useNetwork } from '@/features/network/NetworkProvider'
-import type { PlayerMetadata } from '@/features/profile/types'
 import { clearRoomSession } from '@/features/room/room-session'
-import { PlayerGrid } from './PlayerGrid'
+import { PlayerGrid, type LobbyPlayer } from './PlayerGrid'
 import { RoomCodeDialog } from './RoomCodeDialog'
 
 interface LobbyProps {
+  currentPlayerId: string
+  players: LobbyPlayer[]
   roomCode: string
 }
 
 export function Lobby(props: LobbyProps) {
-  const navigate = useNavigate();
-  const network = useNetwork<PlayerMetadata>();
+  const navigate = useNavigate()
 
   async function quitRoom() {
     try {
-      await clearRoomSession();
+      await clearRoomSession()
     } finally {
-      network.close();
-      navigate('/', { replace: true });
+      navigate('/', { replace: true })
     }
   }
 
@@ -41,9 +39,9 @@ export function Lobby(props: LobbyProps) {
 
       <section className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6">
         <div className="mb-5 flex items-baseline justify-between gap-4">
-          <h1 className="text-2xl font-black tracking-tight text-[#f0e6ff]">{network.connections.length} Joueurs</h1>
+          <h1 className="text-2xl font-black tracking-tight text-[#f0e6ff]">{props.players.length} Joueurs</h1>
         </div>
-        <PlayerGrid connections={network.connections} currentPeerId={network.localPeerId} />
+        <PlayerGrid currentPlayerId={props.currentPlayerId} players={props.players} />
       </section>
     </main>
   )

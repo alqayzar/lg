@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import ErrorBoundary from './ErrorBoundary'
-import { NetworkProvider } from '@/features/network/NetworkProvider'
 import './index.css'
 
 const rootElement = document.getElementById('root')
@@ -16,9 +15,7 @@ createRoot(rootElement).render(
   <StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
-        <NetworkProvider>
-          <App />
-        </NetworkProvider>
+        <App />
       </BrowserRouter>
     </ErrorBoundary>
   </StrictMode>,

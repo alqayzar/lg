@@ -1,22 +1,17 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { useNetwork } from '@/features/network/NetworkProvider'
 import { JoinRoomDialog } from './JoinRoomDialog'
 import { ProfileEditor } from '@/features/profile/ProfileEditor'
-import type { PlayerMetadata } from '@/features/profile/types'
 import { loadProfile, saveProfile } from '@/lib/profile'
-import { createRoomCode, roomCodeToPeerId } from '@/features/room/room-code'
+import { createRoomCode } from '@/features/room/room-code'
 import { saveRoomSession } from '@/features/room/room-session'
-
-const MAX_ROOM_CREATION_ATTEMPTS = 5
 
 export function MainMenu() {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [creationError, setCreationError] = useState<string | null>(null)
   const [hasValidName, setHasValidName] = useState(false)
   const navigate = useNavigate()
-  const network = useNetwork<PlayerMetadata>()
 
   async function saveRegisteredProfile(): Promise<boolean> {
     try {
@@ -45,32 +40,13 @@ export function MainMenu() {
       return
     }
 
-    for (let attempt = 0; attempt < MAX_ROOM_CREATION_ATTEMPTS; attempt += 1) {
-      const roomCode = createRoomCode()
-      const peerId = roomCodeToPeerId(roomCode)
-
-      try {
-        await network.startHost(peerId)
-      } catch {
-        // A generated peer ID can be occupied; retry with a new code.
-        continue
-      }
-
-      try {
-        await saveRoomSession({ peerId, role: 'host', roomCode })
-      } catch {
-        network.close()
-        setCreationError('Impossible d’enregistrer la partie. Réessayez dans un instant.')
-        setIsCreatingRoom(false)
-        return
-      }
-
+    try {
+      await saveRoomSession({ roomCode: createRoomCode() })
       navigate('/play')
-      return
+    } catch {
+      setCreationError('Impossible d’enregistrer la partie. Réessayez dans un instant.')
+      setIsCreatingRoom(false)
     }
-
-    setCreationError('Impossible de créer une partie. Réessayez dans un instant.')
-    setIsCreatingRoom(false)
   }
 
   return (

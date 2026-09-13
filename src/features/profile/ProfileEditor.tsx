@@ -8,9 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { useNetwork } from '@/features/network/NetworkProvider'
 import { useProfile } from './use-profile'
-import type { PlayerMetadata } from './types'
 
 interface ProfileEditorProps {
   onNameValidityChange(isValid: boolean): void
@@ -20,20 +18,12 @@ export function ProfileEditor(props: ProfileEditorProps) {
   const [isAvatarDialogOpen, setIsAvatarDialogOpen] = useState(false)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const galleryInputRef = useRef<HTMLInputElement>(null)
-  const network = useNetwork<PlayerMetadata>()
   const profile = useProfile()
   const hasValidName = profile.name.trim().length > 0
 
   useEffect(() => {
     props.onNameValidityChange(hasValidName)
   }, [hasValidName, props.onNameValidityChange])
-
-  useEffect(() => {
-    network.setLocalMetadata({
-      avatarUrl: profile.avatarUrl,
-      name: profile.name.trim() || 'Joueur',
-    })
-  }, [network, profile.avatarUrl, profile.name])
 
   function handleNameChange(event: ChangeEvent<HTMLInputElement>) {
     profile.updateName(event.target.value)

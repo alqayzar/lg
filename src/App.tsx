@@ -6,6 +6,7 @@ function App() {
   return (
     <Routes>
       <Route element={<MainMenu />} path="/" />
+      <Route element={<MainMenu />} path="/join" />
       <Route element={<Play />} path="/play" />
       <Route element={<Navigate replace to="/" />} path="*" />
     </Routes>

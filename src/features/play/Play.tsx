@@ -3,7 +3,9 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Lobby, type LobbyPlayer } from '@/features/lobby/Lobby'
 import { PeerProvider } from '@/features/peer/PeerProvider'
+import { AvatarDialog } from '@/features/profile/AvatarDialog'
 import { useProfile } from '@/features/profile/use-profile'
+import type { ProfileAvatar } from '@/lib/profile'
 import {
   clearRoomSession,
   loadRoomSession,
@@ -16,7 +18,7 @@ interface ConnectedRoomProps {
   session: RoomSession
 }
 
-function useAvatarDataUrl(avatar: Blob | null): string | null {
+function useAvatarDataUrl(avatar: ProfileAvatar): string | null {
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -41,6 +43,7 @@ function useAvatarDataUrl(avatar: Blob | null): string | null {
 }
 
 function ConnectedRoom(props: ConnectedRoomProps) {
+  const [isAvatarDialogOpen, setIsAvatarDialogOpen] = useState(false)
   const navigate = useNavigate()
   const profile = useProfile()
   const avatarDataUrl = useAvatarDataUrl(profile.avatar)
@@ -79,16 +82,20 @@ function ConnectedRoom(props: ConnectedRoomProps) {
     await quitRoom()
   }
 
+  function openAvatarDialog() {
+    setIsAvatarDialogOpen(true)
+  }
+
   if (room.status !== 'connected' || !room.localPlayerId) {
     return (
-      <main className="grid min-h-dvh place-items-center bg-[#0d0a1a] px-4 text-[#f0e6ff]">
-        <section className="w-full max-w-sm rounded-2xl border-2 border-[#2d1f55] bg-[#11102b] p-6 text-center shadow-[0_0_28px_rgba(124,77,255,0.25)]">
+      <main className="grid min-h-dvh place-items-center bg-[#14131d] px-4 text-[#e7e0c8]">
+        <section className="element-shadow w-full max-w-sm rounded-2xl border-2 border-[#08050f] [--element-color:#24212a] [--element-shadow-depth:8px] bg-[var(--element-color)] p-6 text-center">
           <h1 className="text-xl font-black">
             {room.status === 'error' ? 'Connexion impossible' : 'Connexion à la partie...'}
           </h1>
           {room.error && <p className="mt-3 text-sm text-[#ff4081]" role="alert">{room.error.message}</p>}
           <Button
-            className="mt-5 h-11 w-full border border-[#ff4081] px-5 font-bold text-[#ff4081] hover:bg-[#ff4081] hover:text-white"
+            className="cartoon-press mt-5 h-11 w-full border-2 border-[#08050f] [--element-color:#c95045] bg-[var(--element-color)] px-5 font-bold text-[#16120d] hover:bg-[#df675c]"
             onClick={cancelConnection}
             type="button"
             variant="ghost"
@@ -109,12 +116,22 @@ function ConnectedRoom(props: ConnectedRoomProps) {
   }))
 
   return (
-    <Lobby
-      currentPlayerId={room.localPlayerId}
-      onQuit={quitRoom}
-      players={players}
-      roomCode={props.session.roomCode}
-    />
+    <>
+      <AvatarDialog
+        avatar={profile.avatar}
+        onAvatarChange={profile.updateAvatar}
+        onAvatarRemove={profile.removeAvatar}
+        onOpenChange={setIsAvatarDialogOpen}
+        open={isAvatarDialogOpen}
+      />
+      <Lobby
+        currentPlayerId={room.localPlayerId}
+        onCurrentPlayerClick={openAvatarDialog}
+        onQuit={quitRoom}
+        players={players}
+        roomCode={props.session.roomCode}
+      />
+    </>
   )
 }
 

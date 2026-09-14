@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { loadProfile, saveProfile } from '@/lib/profile'
+import { loadProfile, saveProfile, type ProfileAvatar } from '@/lib/profile'
 
 export function useProfile() {
   const [name, setName] = useState('')
-  const [avatar, setAvatar] = useState<Blob | null>(null)
+  const [avatar, setAvatar] = useState<ProfileAvatar>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const hasEditedProfile = useRef(false)
 
@@ -40,11 +40,17 @@ export function useProfile() {
     void saveProfile({ name: nextName, avatar })
   }
 
-  function updateAvatar(nextAvatar: Blob) {
+  function updateAvatar(nextAvatar: Exclude<ProfileAvatar, null>) {
     hasEditedProfile.current = true
     setAvatar(nextAvatar)
     void saveProfile({ name, avatar: nextAvatar })
   }
 
-  return { avatar, avatarUrl, name, updateName, updateAvatar }
+  function removeAvatar() {
+    hasEditedProfile.current = true
+    setAvatar(null)
+    void saveProfile({ name, avatar: null })
+  }
+
+  return { avatar, avatarUrl, name, removeAvatar, updateName, updateAvatar }
 }

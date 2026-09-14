@@ -4,7 +4,7 @@ export interface PlayerInfo {
 }
 
 export type GuestRoomMessage =
-  | { type: 'join' }
+  | { type: 'join'; knownPlayerIds: string[] }
   | { type: 'leave' }
   | { type: 'player-info'; player: PlayerInfo }
   | { type: 'room-closed-ack' }
@@ -33,7 +33,13 @@ export function parseClaimedPlayerId(metadata: unknown): string | null {
 
 export function parseGuestRoomMessage(message: unknown): GuestRoomMessage | null {
   if (!isRecord(message)) return null
-  if (message.type === 'join' || message.type === 'leave' || message.type === 'room-closed-ack') {
+  if (message.type === 'join') {
+    if (!Array.isArray(message.knownPlayerIds) || !message.knownPlayerIds.every((playerId) => typeof playerId === 'string')) {
+      return null
+    }
+    return { knownPlayerIds: message.knownPlayerIds, type: 'join' }
+  }
+  if (message.type === 'leave' || message.type === 'room-closed-ack') {
     return { type: message.type }
   }
   if (message.type === 'player-info') {

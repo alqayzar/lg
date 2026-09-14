@@ -7,7 +7,12 @@ import {
   type HostRoomMessage,
   type PlayerInfo,
 } from './room-protocol'
-import { saveRoomSession, type RoomSession } from './room-session'
+import {
+  loadRoomPlayerInfo,
+  saveRoomPlayerInfo,
+  saveRoomSession,
+  type RoomSession,
+} from './room-session'
 
 type RoomConnectionStatus = 'connecting' | 'connected' | 'room-closed' | 'error'
 const CONTROL_MESSAGE_TIMEOUT_MS = 4000
@@ -36,16 +41,59 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
   const hostClosureAckRef = useRef<(() => void) | null>(null)
   const hostClosurePendingRef = useRef<Set<string> | null>(null)
   const hostClosingRef = useRef(false)
+  const knownPlayerIdsByConnectionRef = useRef(new Map<string, Set<string>>())
   const hostPersistenceRef = useRef(Promise.resolve())
+  const playerInfoPersistenceRef = useRef(Promise.resolve())
   const leavingRef = useRef(false)
   const localPlayerIdRef = useRef(localPlayerId)
   const localPlayerRef = useRef(options.player)
   const playerInfoRef = useRef(new Map<string, PlayerInfo>())
+  const playerInfoCacheReadyRef = useRef(false)
+  const sendGuestJoinRef = useRef<() => void>(() => {})
   const roomClosedRef = useRef(false)
 
   assignedPlayerIdCallbackRef.current = options.onPlayerIdAssigned
   localPlayerIdRef.current = localPlayerId
   localPlayerRef.current = options.player
+
+  function storePlayerInfo(playerId: string, player: PlayerInfo) {
+    playerInfoRef.current.set(playerId, player)
+    const nextPlayerInfo = Object.fromEntries(playerInfoRef.current)
+    setPlayerInfoById(nextPlayerInfo)
+    const nextSave = playerInfoPersistenceRef.current.then(() => {
+      return saveRoomPlayerInfo(options.session.roomCode, nextPlayerInfo)
+    })
+    playerInfoPersistenceRef.current = nextSave.catch(() => {})
+  }
+
+  useEffect(() => {
+    let active = true
+    playerInfoCacheReadyRef.current = false
+
+    void loadRoomPlayerInfo(options.session.roomCode).then((cachedPlayerInfo) => {
+      if (!active) return
+
+      Object.entries(cachedPlayerInfo).forEach(([playerId, player]) => {
+        if (!playerInfoRef.current.has(playerId)) playerInfoRef.current.set(playerId, player)
+      })
+      setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+      playerInfoCacheReadyRef.current = true
+      if (options.session.role === 'host') {
+        knownPlayerIdsByConnectionRef.current.forEach((knownPlayerIds, connectionId) => {
+          playerInfoRef.current.forEach((player, playerId) => {
+            if (!knownPlayerIds.has(playerId)) {
+              peer.sendTo(connectionId, { type: 'player-info', player, playerId } satisfies HostRoomMessage)
+            }
+          })
+        })
+      }
+      sendGuestJoinRef.current()
+    })
+
+    return () => {
+      active = false
+    }
+  }, [options.session.roomCode])
 
   useEffect(() => {
     let active = true
@@ -57,12 +105,10 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
       const claimedPlayerIds = new Map<string, string | null>()
       const pendingPlayerInfo = new Map<string, PlayerInfo>()
       const playerConnections = new Map<string, string>()
-      playerInfoRef.current.set(hostSession.playerId, localPlayerRef.current)
-      setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+      storePlayerInfo(hostSession.playerId, localPlayerRef.current)
 
       function cachePlayerInfo(playerId: string, player: PlayerInfo, connectionId?: string) {
-        playerInfoRef.current.set(playerId, player)
-        setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+        storePlayerInfo(playerId, player)
         const message: HostRoomMessage = { type: 'player-info', player, playerId }
         const recipientConnectionIds = connectionId
           ? [...activePlayers.keys()].filter((id) => id !== connectionId)
@@ -106,7 +152,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         return playerId
       }
 
-      async function joinPlayer(connectionId: string) {
+      async function joinPlayer(connectionId: string, knownPlayerIds: string[]) {
         let playerId = activePlayers.get(connectionId)
         let isNewAssignment = false
 
@@ -136,6 +182,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
           activeHostConnectionIdsRef.current.add(connectionId)
           playerConnections.set(playerId, connectionId)
         }
+        knownPlayerIdsByConnectionRef.current.set(connectionId, new Set(knownPlayerIds))
 
         if (isNewAssignment) {
           try {
@@ -158,20 +205,23 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         if (!active || !peer.isConnected(connectionId) || activePlayers.get(connectionId) !== playerId) return
         const joinedMessage: HostRoomMessage = { type: 'joined', playerId }
         peer.sendTo(connectionId, joinedMessage)
-        for (const [knownPlayerId, knownPlayer] of playerInfoRef.current) {
-          peer.sendTo(connectionId, { type: 'player-info', player: knownPlayer, playerId: knownPlayerId } satisfies HostRoomMessage)
-        }
         const pendingPlayer = pendingPlayerInfo.get(connectionId)
         if (pendingPlayer) {
           pendingPlayerInfo.delete(connectionId)
           cachePlayerInfo(playerId, pendingPlayer, connectionId)
         }
         publishPlayers()
+        const knownPlayerIdSet = new Set(knownPlayerIds)
+        for (const [knownPlayerId, knownPlayer] of playerInfoRef.current) {
+          if (knownPlayerIdSet.has(knownPlayerId) || knownPlayerId === playerId) continue
+          peer.sendTo(connectionId, { type: 'player-info', player: knownPlayer, playerId: knownPlayerId } satisfies HostRoomMessage)
+        }
       }
 
       function removePlayer(connectionId: string, forgetAssignment: boolean) {
         claimedPlayerIds.delete(connectionId)
         pendingPlayerInfo.delete(connectionId)
+        knownPlayerIdsByConnectionRef.current.delete(connectionId)
         const playerId = activePlayers.get(connectionId)
         if (!playerId) return Promise.resolve()
 
@@ -216,7 +266,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
             peer.sendTo(event.connectionId, { type: 'room-closed' } satisfies HostRoomMessage)
             return
           }
-          void joinPlayer(event.connectionId)
+          void joinPlayer(event.connectionId, message.knownPlayerIds)
         } else if (message?.type === 'player-info') {
           const playerId = activePlayers.get(event.connectionId)
           if (playerId) {
@@ -239,20 +289,34 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
       return () => {
         active = false
         activeHostConnectionIdsRef.current.clear()
+        knownPlayerIdsByConnectionRef.current.clear()
         unsubscribe()
       }
     }
 
+    let hostConnectionOpen = false
+    let guestJoinSent = false
+
+    function sendGuestJoin() {
+      if (!hostConnectionOpen || !playerInfoCacheReadyRef.current || guestJoinSent) return
+      guestJoinSent = true
+      peer.sendToHost({ type: 'join', knownPlayerIds: [...playerInfoRef.current.keys()] })
+      peer.sendToHost({ type: 'player-info', player: localPlayerRef.current })
+    }
+
+    sendGuestJoinRef.current = sendGuestJoin
     const unsubscribe = peer.subscribe((event) => {
       if (!active || roomClosedRef.current) return
 
       if (event.type === 'host-open') {
+        hostConnectionOpen = true
         setStatus('connecting')
-        peer.sendToHost({ type: 'join' })
-        peer.sendToHost({ type: 'player-info', player: localPlayerRef.current })
+        sendGuestJoin()
         return
       }
       if (event.type === 'host-close') {
+        hostConnectionOpen = false
+        guestJoinSent = false
         hasRosterRef.current = false
         setPlayerIds([])
         setStatus('connecting')
@@ -268,8 +332,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
       if (message?.type === 'joined') {
         localPlayerIdRef.current = message.playerId
         setLocalPlayerId(message.playerId)
-        playerInfoRef.current.set(message.playerId, localPlayerRef.current)
-        setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+        storePlayerInfo(message.playerId, localPlayerRef.current)
         assignedPlayerIdCallbackRef.current(message.playerId)
         if (hasRosterRef.current) setStatus('connected')
         void saveRoomSession({
@@ -285,8 +348,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
           setStatus('connected')
         }
       } else if (message?.type === 'player-info') {
-        playerInfoRef.current.set(message.playerId, message.player)
-        setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+        storePlayerInfo(message.playerId, message.player)
       } else if (message?.type === 'left') {
         guestLeaveAckRef.current?.()
       } else if (message?.type === 'room-closed') {
@@ -303,22 +365,21 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
 
     return () => {
       active = false
+      sendGuestJoinRef.current = () => {}
       unsubscribe()
     }
   }, [options.session, peer])
 
   useEffect(() => {
     if (options.session.role === 'host') {
-      playerInfoRef.current.set(options.session.playerId, options.player)
-      setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+      storePlayerInfo(options.session.playerId, options.player)
       peer.broadcast({ type: 'player-info', player: options.player, playerId: options.session.playerId } satisfies HostRoomMessage)
       return
     }
 
     const localPlayerId = localPlayerIdRef.current
     if (localPlayerId) {
-      playerInfoRef.current.set(localPlayerId, options.player)
-      setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+      storePlayerInfo(localPlayerId, options.player)
     }
     peer.sendToHost({ type: 'player-info', player: options.player })
   }, [options.player.avatar, options.player.name, options.session, peer])

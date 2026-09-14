@@ -9,32 +9,45 @@ export interface LobbyPlayer {
 
 interface PlayerGridProps {
   currentPlayerId: string
+  onCurrentPlayerClick: () => void
   players: LobbyPlayer[]
 }
 
 export function PlayerGrid(props: PlayerGridProps) {
+  function handleCurrentPlayerKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    props.onCurrentPlayerClick()
+  }
+
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,100px))] justify-center gap-3">
+    <div className="grid flex-1 content-start grid-cols-[repeat(auto-fill,minmax(88px,100px))] justify-center gap-3">
       {props.players.map((player) => {
+        const isCurrentPlayer = player.id === props.currentPlayerId
         return (
         <article
-          className={`relative flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-[#2d1f55] bg-[#1a1133] px-2 py-3 shadow-[0_0_14px_-4px_#7c4dff] ${player.id === props.currentPlayerId ? 'ring-2 ring-[#00e5ff] ring-offset-2 ring-offset-[#0d0a1a]' : ''}`}
+          aria-label={isCurrentPlayer ? 'Modifier votre image de profil' : undefined}
+          className={`element-shadow relative flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-[#08050f] [--element-color:#24212a] bg-[var(--element-color)] px-2 py-3 ${isCurrentPlayer ? 'cursor-pointer outline-2 outline-[#73cbd1] outline-offset-2' : ''}`}
           key={player.id}
+          onClick={isCurrentPlayer ? props.onCurrentPlayerClick : undefined}
+          onKeyDown={isCurrentPlayer ? handleCurrentPlayerKeyDown : undefined}
+          role={isCurrentPlayer ? 'button' : undefined}
+          tabIndex={isCurrentPlayer ? 0 : undefined}
         >
           {player.isHost && (
             <Star
               aria-label="Hôte"
-              className="absolute -top-3 -right-2 size-6 fill-[#ffe57f] text-[#ffab40] drop-shadow-[0_0_5px_#ffe57f]"
+              className="absolute -top-3 -right-2 size-6 fill-[#ffe57f] text-[#08050f]"
             />
           )}
-          <div className="grid size-14 place-items-center overflow-hidden rounded-full border-2 border-[#7c4dff] bg-[#130e25] text-[#a08ab8]">
+          <div className="grid size-14 place-items-center overflow-hidden rounded-full border-2 border-[#08050f] bg-[#16151d] text-[#aaa59a]">
             {player.avatar ? (
               <img alt="" className="size-full object-cover" src={player.avatar} />
             ) : (
               <UserRound aria-hidden="true" className="size-6" />
             )}
           </div>
-          <p className="w-full break-words text-center text-xs font-semibold text-[#f0e6ff]">
+          <p className="w-full break-words text-center text-xs font-semibold text-[#e7e0c8]">
             {player.name}
           </p>
         </article>

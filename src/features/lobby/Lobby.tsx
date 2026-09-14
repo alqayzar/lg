@@ -6,6 +6,7 @@ import { RoomCodeDialog } from './RoomCodeDialog'
 
 interface LobbyProps {
   currentPlayerId: string
+  onCurrentPlayerClick: () => void
   onQuit: () => Promise<void>
   players: LobbyPlayer[]
   roomCode: string
@@ -15,6 +16,7 @@ export type { LobbyPlayer }
 
 export function Lobby(props: LobbyProps) {
   const [isQuitting, setIsQuitting] = useState(false)
+  const isHost = props.players.some((player) => player.id === props.currentPlayerId && player.isHost)
 
   async function quitRoom() {
     if (isQuitting) return
@@ -27,12 +29,12 @@ export function Lobby(props: LobbyProps) {
   }
 
   return (
-    <main className="min-h-dvh bg-[#0d0a1a] text-[#f0e6ff]">
-      <div className="h-[3px] bg-linear-to-r from-[#00e5ff] via-[#7c4dff] via-50% to-[#ff6d00]" />
-      <header className="flex items-center justify-between gap-2 border-b border-[#1c1438] bg-[#090618] px-4 py-3 shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
+    <main className="flex min-h-dvh flex-col bg-[#14131d] text-[#e7e0c8]">
+      <div className="h-2 bg-[#e6c65d]" />
+      <header className="element-shadow flex items-center justify-between gap-2 border-b-2 border-[#08050f] [--element-color:#24212a] bg-[var(--element-color)] px-4 py-3">
         <RoomCodeDialog roomCode={props.roomCode} />
         <Button
-          className="h-9 border border-[#ff4081] px-3 text-sm font-bold text-[#ff4081] hover:bg-[#ff4081] hover:text-white"
+          className="cartoon-press cartoon-press-sm h-9 border-2 border-[#08050f] [--element-color:#c95045] bg-[var(--element-color)] px-3 text-sm font-bold text-[#16120d] hover:bg-[#df675c]"
           disabled={isQuitting}
           onClick={quitRoom}
           type="button"
@@ -42,11 +44,21 @@ export function Lobby(props: LobbyProps) {
         </Button>
       </header>
 
-      <section className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6">
+      <section className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-8 sm:px-6">
         <div className="mb-5 flex items-baseline justify-between gap-4">
-          <h1 className="text-2xl font-black tracking-tight text-[#f0e6ff]">{props.players.length} Joueurs</h1>
+          <h1 className="text-2xl font-black tracking-tight uppercase text-[#e7e0c8]">{props.players.length} Joueurs</h1>
         </div>
-        <PlayerGrid currentPlayerId={props.currentPlayerId} players={props.players} />
+        <PlayerGrid currentPlayerId={props.currentPlayerId} onCurrentPlayerClick={props.onCurrentPlayerClick} players={props.players} />
+        {isHost && (
+          <div className="grid grid-cols-2 gap-3">
+            <Button className="uppercase cartoon-press h-12 border-2 border-[#08050f] [--element-color:#e6c65d] bg-[var(--element-color)] font-bold text-[#16120d] hover:bg-[#f0d97d]" type="button">
+              Paramètre
+            </Button>
+            <Button className="uppercase cartoon-press h-12 border-2 border-[#08050f] [--element-color:#73cbd1] bg-[var(--element-color)] font-bold text-[#16120d] hover:bg-[#91dce0]" type="button">
+              Lancer
+            </Button>
+          </div>
+        )}
       </section>
     </main>
   )

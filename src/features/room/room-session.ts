@@ -1,4 +1,5 @@
 import { openDB } from 'idb'
+import type { PlayerInfo } from './room-protocol'
 
 export interface HostRoomSession {
   assignedPlayerIds: string[]
@@ -19,7 +20,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-const database = openDB('loupgarou', 2, {
+const database = openDB('loupgarou', 3, {
   upgrade(db) {
     if (!db.objectStoreNames.contains('profile')) {
       db.createObjectStore('profile')
@@ -27,6 +28,10 @@ const database = openDB('loupgarou', 2, {
 
     if (!db.objectStoreNames.contains('room-session')) {
       db.createObjectStore('room-session')
+    }
+
+    if (!db.objectStoreNames.contains('room-player-info')) {
+      db.createObjectStore('room-player-info')
     }
   },
 })
@@ -81,4 +86,22 @@ export async function loadRoomSession(): Promise<RoomSession | undefined> {
 
 export async function saveRoomSession(session: RoomSession): Promise<void> {
   await (await database).put('room-session', session, 'active')
+}
+
+export async function loadRoomPlayerInfo(roomCode: string): Promise<Record<string, PlayerInfo>> {
+  const playerInfo: unknown = await (await database).get('room-player-info', roomCode)
+  if (!isRecord(playerInfo)) return {}
+
+  return Object.fromEntries(
+    Object.entries(playerInfo).filter((entry): entry is [string, PlayerInfo] => {
+      const value = entry[1]
+      return isRecord(value)
+        && typeof value.name === 'string'
+        && (value.avatar === null || typeof value.avatar === 'string')
+    }),
+  )
+}
+
+export async function saveRoomPlayerInfo(roomCode: string, playerInfo: Record<string, PlayerInfo>): Promise<void> {
+  await (await database).put('room-player-info', playerInfo, roomCode)
 }

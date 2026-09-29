@@ -1,16 +1,16 @@
 {
-  "id": "/",
+  "id": "./",
   "name": "Loup Garou",
   "short_name": "Loup Garou",
   "description": "Une partie de Loup Garou multijoueur.",
   "lang": "fr",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#3e3eec",
   "theme_color": "#3e3eec",
   "icons": [
     {
-      "src": "/manifest-icon.svg",
+      "src": "manifest-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

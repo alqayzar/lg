@@ -17,7 +17,7 @@ export function RoomCodeDialog(props: RoomCodeDialogProps) {
   const [hasCopiedRoomCode, setHasCopiedRoomCode] = useState(false)
   const [hasCopiedJoinLink, setHasCopiedJoinLink] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
-  const joinUrl = new URL('/join', window.location.origin)
+  const joinUrl = new URL('join', new URL(import.meta.env.BASE_URL, window.location.origin))
   joinUrl.searchParams.set('room', props.roomCode)
 
   function handleOpenChange(nextIsOpen: boolean) {

@@ -22,8 +22,8 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   public render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <main className="grid min-h-screen place-items-center bg-[#16111f] p-6 text-center text-slate-100">
-          <p>Une erreur inattendue est survenue. Rechargez la page pour reessayer.</p>
+        <main className="grid min-h-screen place-items-center bg-[var(--canvas)] p-6 text-center text-[var(--text-color)]">
+          <p className="element-shadow max-w-sm rounded-3xl border-4 border-[var(--outline-color)] [--element-color:var(--paper)] p-6 font-bold">Une erreur inattendue est survenue. Rechargez la page pour réessayer.</p>
         </main>
       )
     }

@@ -3,12 +3,14 @@ import type { PlayerInfo } from './room-protocol'
 
 export interface HostRoomSession {
   assignedPlayerIds: string[]
+  gameStarted: boolean
   playerId: string
   role: 'host'
   roomCode: string
 }
 
 export interface GuestRoomSession {
+  gameStarted: boolean
   playerId?: string
   role: 'guest'
   roomCode: string
@@ -36,6 +38,8 @@ const database = openDB('loupgarou', 3, {
   },
 })
 
+const LAST_GUEST_ROOM_CODE_KEY = 'last-guest-room-code'
+
 export async function clearRoomSession(): Promise<void> {
   await (await database).delete('room-session', 'active')
 }
@@ -53,6 +57,7 @@ export async function loadRoomSession(): Promise<RoomSession | undefined> {
   ) {
     return {
       assignedPlayerIds: session.assignedPlayerIds,
+      gameStarted: session.gameStarted === true,
       playerId: session.playerId,
       role: 'host',
       roomCode: session.roomCode,
@@ -64,6 +69,7 @@ export async function loadRoomSession(): Promise<RoomSession | undefined> {
   ) {
     return {
       ...(session.playerId ? { playerId: session.playerId } : {}),
+      gameStarted: session.gameStarted === true,
       role: 'guest',
       roomCode: session.roomCode,
     }
@@ -72,6 +78,7 @@ export async function loadRoomSession(): Promise<RoomSession | undefined> {
   if (session.role === undefined) {
     const migratedSession: HostRoomSession = {
       assignedPlayerIds: [],
+      gameStarted: false,
       playerId: crypto.randomUUID(),
       role: 'host',
       roomCode: session.roomCode,
@@ -86,6 +93,15 @@ export async function loadRoomSession(): Promise<RoomSession | undefined> {
 
 export async function saveRoomSession(session: RoomSession): Promise<void> {
   await (await database).put('room-session', session, 'active')
+}
+
+export async function loadLastGuestRoomCode(): Promise<string | undefined> {
+  const roomCode: unknown = await (await database).get('room-session', LAST_GUEST_ROOM_CODE_KEY)
+  return typeof roomCode === 'string' ? roomCode : undefined
+}
+
+export async function saveLastGuestRoomCode(roomCode: string): Promise<void> {
+  await (await database).put('room-session', roomCode, LAST_GUEST_ROOM_CODE_KEY)
 }
 
 export async function loadRoomPlayerInfo(roomCode: string): Promise<Record<string, PlayerInfo>> {

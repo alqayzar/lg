@@ -10,7 +10,11 @@ export type GuestRoomMessage =
   | { type: 'room-closed-ack' }
 
 export type HostRoomMessage =
+  | { type: 'game-screen-config'; bottomElements: GameBottomElement[] }
+  | { type: 'game-stop' }
+  | { type: 'game-start' }
   | { type: 'joined'; playerId: string }
+  | { type: 'kicked' }
   | { type: 'left' }
   | { type: 'player-info'; player: PlayerInfo; playerId: string }
   | { type: 'players-sync'; playerIds: string[] }
@@ -52,6 +56,13 @@ export function parseGuestRoomMessage(message: unknown): GuestRoomMessage | null
 export function parseHostRoomMessage(message: unknown): HostRoomMessage | null {
   if (!isRecord(message)) return null
 
+  if (message.type === 'game-screen-config') {
+    const bottomElements = parseGameBottomElements(message.bottomElements)
+    return bottomElements ? { bottomElements, type: 'game-screen-config' } : null
+  }
+  if (message.type === 'game-start') return { type: 'game-start' }
+  if (message.type === 'game-stop') return { type: 'game-stop' }
+  if (message.type === 'kicked') return { type: 'kicked' }
   if (message.type === 'room-closed') return { type: 'room-closed' }
   if (message.type === 'left') return { type: 'left' }
   if (message.type === 'player-info' && typeof message.playerId === 'string') {
@@ -71,3 +82,4 @@ export function parseHostRoomMessage(message: unknown): HostRoomMessage | null {
 
   return null
 }
+import { parseGameBottomElements, type GameBottomElement } from '@/features/play/game-screen-configuration'

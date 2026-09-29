@@ -57,25 +57,25 @@ export function RoomCodeDialog(props: RoomCodeDialogProps) {
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <Button
         aria-label="Afficher le code de la partie"
-        className="cartoon-press cartoon-press-sm h-9 border-2 border-[#08050f] [--element-color:#73cbd1] bg-[var(--element-color)] px-3 font-mono text-sm font-bold tracking-[0.2em] text-[#16120d] hover:bg-[#98dde0]"
+        className="cartoon-press cartoon-press-sm h-10 rounded-full border-[var(--outline-color)] [--element-color:var(--cyan)] px-4 text-sm font-black text-[var(--text-color)] hover:bg-[#a1e7f0]"
         onClick={openDialog}
         type="button"
         variant="ghost"
       >
-        {props.roomCode}
+        Inviter
       </Button>
-      <DialogContent className="element-shadow border-2 border-[#08050f] [--element-color:#24212a] [--element-shadow-depth:8px] bg-[var(--element-color)] p-6 text-[#e7e0c8]">
+      <DialogContent className="gap-2">
         <DialogHeader>
-          <DialogTitle className="text-[#e7e0c8] uppercase">Room Code</DialogTitle>
+          <DialogTitle className="text-[var(--text-color)]">Code du salon</DialogTitle>
         </DialogHeader>
-        <p className="rounded-xl border-2 border-[#08050f] bg-[#16151d] px-4 py-3 text-center font-mono text-xl font-bold tracking-[0.2em] text-[#73cbd1]">
+        <p className="rounded-2xl border-4 border-[var(--outline-color)] bg-[var(--cyan)] px-4 py-3 text-center font-mono text-xl font-black tracking-[0.2em] text-[var(--text-color)]">
           {props.roomCode}
         </p>
-        <div className="element-shadow w-full rounded-xl border-2 border-[#08050f] [--element-color:#e7e0c8] [--element-shadow-depth:4px] bg-[var(--element-color)] p-3">
-          <QRCodeSVG className="h-auto w-full" bgColor="#e7e0c8" fgColor="#16120d" size={256} value={joinUrl.toString()} />
+        <div className="w-full rounded-2xl border-4 border-[var(--outline-color)] bg-white p-3">
+          <QRCodeSVG className="h-auto w-full" bgColor="#ffffff" fgColor="#151515" size={256} value={joinUrl.toString()} />
         </div>
         <Button
-          className="cartoon-press h-11 border-2 border-[#08050f] [--element-color:#73cbd1] bg-[var(--element-color)] font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#98dde0]"
+          className="cartoon-press h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--mint)] font-black text-[var(--text-color)] hover:bg-[#95e7df]"
           onClick={copyRoomCode}
           type="button"
         >
@@ -83,7 +83,7 @@ export function RoomCodeDialog(props: RoomCodeDialogProps) {
           {hasCopiedRoomCode ? 'Code copié' : 'Copier le code'}
         </Button>
         <Button
-          className="cartoon-press h-11 border-2 border-[#08050f] [--element-color:#e6c65d] bg-[var(--element-color)] font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#f0d97d]"
+          className="cartoon-press h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--gold)] font-black text-[var(--text-color)] hover:bg-[#ffc95c]"
           onClick={copyJoinLink}
           type="button"
         >

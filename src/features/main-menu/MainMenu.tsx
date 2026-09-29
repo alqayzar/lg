@@ -1,15 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
+import { AppLogo } from '@/components/AppLogo'
 import { JoinRoomDialog } from './JoinRoomDialog'
 import { ProfileEditor } from '@/features/profile/ProfileEditor'
 import { loadProfile, saveProfile } from '@/lib/profile'
 import { createRoomCode, isRoomCode, normalizeRoomCode } from '@/features/room/room-code'
-import { loadRoomSession, saveRoomSession } from '@/features/room/room-session'
+import { loadLastGuestRoomCode, loadRoomSession, saveRoomSession } from '@/features/room/room-session'
 
 export function MainMenu() {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [isJoiningRoom, setIsJoiningRoom] = useState(false)
+  const [lastGuestRoomCode, setLastGuestRoomCode] = useState<string | undefined>()
   const [creationError, setCreationError] = useState<string | null>(null)
   const [hasValidName, setHasValidName] = useState(false)
   const location = useLocation()
@@ -18,6 +20,16 @@ export function MainMenu() {
   const roomCode = normalizeRoomCode(searchParams.get('room') ?? '')
   const isInvitation = location.pathname === '/join'
   const hasValidRoomCode = isRoomCode(roomCode)
+
+  useEffect(() => {
+    let active = true
+    void loadLastGuestRoomCode().then((savedRoomCode) => {
+      if (active) setLastGuestRoomCode(savedRoomCode)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function saveRegisteredProfile(): Promise<void> {
     const profile = await loadProfile()
@@ -38,12 +50,13 @@ export function MainMenu() {
     try {
       await saveRegisteredProfile()
       await saveRoomSession({
+        gameStarted: false,
         assignedPlayerIds: [],
         playerId: crypto.randomUUID(),
         role: 'host',
         roomCode: createRoomCode(),
       })
-      navigate('/play')
+        navigate('/room')
     } catch {
       setCreationError('Impossible d’enregistrer la partie. Réessayez dans un instant.')
       setIsCreatingRoom(false)
@@ -56,8 +69,8 @@ export function MainMenu() {
     const playerId = existingSession?.role === 'guest' && existingSession.roomCode === roomCode
       ? existingSession.playerId
       : undefined
-    await saveRoomSession({ ...(playerId ? { playerId } : {}), role: 'guest', roomCode })
-    navigate('/play')
+    await saveRoomSession({ ...(playerId ? { playerId } : {}), gameStarted: false, role: 'guest', roomCode })
+    navigate('/room')
   }
 
   async function joinInvitation() {
@@ -74,15 +87,14 @@ export function MainMenu() {
   }
 
   return (
-    <main className="relative grid min-h-dvh place-items-center overflow-hidden bg-[#14131d] px-4 py-4 text-[#e7e0c8]">
-      <div className="absolute inset-x-0 top-0 h-2 bg-[#e6c65d]" />
-
-      <section className="relative flex w-full max-w-[340px] flex-col items-center gap-8">
+    <main className="grid min-h-dvh place-items-center bg-[var(--canvas)] px-5 py-8 text-[var(--canvas-foreground)]">
+      <section className="flex w-full max-w-[380px] flex-col items-center gap-6">
         <header className="text-center">
-          <h1 className="text-[2.6rem] leading-none font-black tracking-[-0.02em] text-[#e7e0c8]">
-            <span aria-hidden="true">🐺 </span>Loup Garou
+          <AppLogo className="mx-auto mb-3 size-20" />
+          <h1 className="text-[2.55rem] leading-none font-black tracking-[-0.045em] text-[var(--canvas-foreground)]">
+            Loup Garou
           </h1>
-          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.15em] text-[#aaa59a]">
+          <p className="mt-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--canvas-muted)]">
             Qui se cache parmi vous ?
           </p>
         </header>
@@ -91,7 +103,7 @@ export function MainMenu() {
 
         {isInvitation ? (
           <Button
-            className="cartoon-press h-12 w-full rounded-xl border-2 border-[#08050f] [--element-color:#df6542] bg-[var(--element-color)] text-sm font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#ee7e57]"
+            className="cartoon-press h-13 w-full rounded-2xl border-[var(--outline-color)] [--element-color:var(--coral)] text-sm font-black tracking-[0.05em] text-[var(--text-color)] uppercase hover:bg-[#ff7885]"
             disabled={isJoiningRoom || !hasValidName || !hasValidRoomCode}
             onClick={joinInvitation}
             size="lg"
@@ -100,9 +112,9 @@ export function MainMenu() {
             {isJoiningRoom ? 'Connexion...' : `Rejoindre ${roomCode}`}
           </Button>
         ) : (
-          <div className="flex w-full gap-4">
+          <div className="grid w-full grid-cols-2 gap-3">
             <Button
-              className="cartoon-press h-12 flex-1 rounded-xl border-2 border-[#08050f] [--element-color:#73cbd1] bg-[var(--element-color)] text-sm font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#98dde0]"
+              className="cartoon-press h-13 rounded-2xl border-[var(--outline-color)] [--element-color:var(--mint)] text-sm font-black tracking-[0.05em] text-[var(--text-color)] uppercase hover:bg-[#95e7df]"
               disabled={isCreatingRoom || !hasValidName}
               onClick={createRoom}
               size="lg"
@@ -110,10 +122,10 @@ export function MainMenu() {
             >
               {isCreatingRoom ? 'Création...' : 'Créer'}
             </Button>
-            <JoinRoomDialog disabled={!hasValidName} onJoin={joinRoom} />
+            <JoinRoomDialog defaultRoomCode={lastGuestRoomCode} disabled={!hasValidName} onJoin={joinRoom} />
           </div>
         )}
-        {creationError && <p className="-mt-4 text-center text-sm font-medium text-[#ff4081]" role="alert">{creationError}</p>}
+        {creationError && <p className="text-center text-sm font-bold text-[#963f34]" role="alert">{creationError}</p>}
       </section>
     </main>
   )

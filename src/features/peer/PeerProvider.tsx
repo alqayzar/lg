@@ -2,13 +2,15 @@ import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode }
 import Peer, { type DataConnection, type PeerOptions } from 'peerjs'
 
 const USE_DEV_PEER_SERVER = false
-const GUEST_RETRY_INITIAL_DELAY_MS = 250
-const GUEST_RETRY_MAX_DELAY_MS = 2000
+const GUEST_RETRY_INITIAL_DELAY_MS = 100
+const GUEST_RETRY_MAX_DELAY_MS = 1000
+const GUEST_CONNECTION_TIMEOUT_MS = 200
 const CLOSE_FLUSH_DELAY_MS = 200
 const SIGNALING_RECONNECT_DELAY_MS = 1000
-const HOST_START_RETRY_DELAY_MS = 500
-const HOST_START_MAX_ATTEMPTS = 6
+const HOST_START_RETRY_DELAY_MS = 1000
+const HOST_START_MAX_ATTEMPTS = 20
 const STARTUP_RETRY_ERROR_TYPES = new Set(['network', 'server-error', 'socket-error', 'socket-closed'])
+const SIGNALING_RECOVERABLE_ERROR_TYPES = new Set(['network', 'socket-error', 'socket-closed'])
 
 export type RoomPeerEvent =
   | { type: 'peer-open' }
@@ -61,6 +63,7 @@ function PeerProvider(props: PeerProviderProps) {
     let shutdownPromise: Promise<void> | undefined
     let hostStartAttempts = 0
     let hostConnection: DataConnection | null = null
+    let hostConnectionTimeout: number | undefined
     const connections = new Map<string, DataConnection>()
     const options: PeerOptions = USE_DEV_PEER_SERVER
       ? { host: window.location.hostname, path: '/lg-narrator', port: 9000 }
@@ -77,7 +80,22 @@ function PeerProvider(props: PeerProviderProps) {
         guestRetryTimeout = undefined
         connectToHost()
       }, guestRetryDelayMs)
-      guestRetryDelayMs = Math.min(guestRetryDelayMs * 2, GUEST_RETRY_MAX_DELAY_MS)
+      guestRetryDelayMs = Math.min(guestRetryDelayMs + 200, GUEST_RETRY_MAX_DELAY_MS)
+    }
+
+    function clearHostConnectionTimeout() {
+      if (hostConnectionTimeout === undefined) return
+      window.clearTimeout(hostConnectionTimeout)
+      hostConnectionTimeout = undefined
+    }
+
+    function retryHostConnection(connection: DataConnection) {
+      if (closed || hostConnection !== connection) return
+      clearHostConnectionTimeout()
+      hostConnection = null
+      connection.close()
+      emit({ type: 'host-close' })
+      scheduleGuestRetry()
     }
 
     function connectToHost() {
@@ -89,9 +107,13 @@ function PeerProvider(props: PeerProviderProps) {
 
       const connection = peer.connect(props.roomCode, { metadata: metadataRef.current })
       hostConnection = connection
+      hostConnectionTimeout = window.setTimeout(() => {
+        retryHostConnection(connection)
+      }, GUEST_CONNECTION_TIMEOUT_MS)
 
       connection.on('open', () => {
         if (closed || hostConnection !== connection) return
+        clearHostConnectionTimeout()
         guestRetryDelayMs = GUEST_RETRY_INITIAL_DELAY_MS
         emit({ type: 'host-open' })
       })
@@ -101,9 +123,13 @@ function PeerProvider(props: PeerProviderProps) {
       })
       connection.on('close', () => {
         if (closed || hostConnection !== connection) return
+        clearHostConnectionTimeout()
         hostConnection = null
         emit({ type: 'host-close' })
         scheduleGuestRetry()
+      })
+      connection.on('error', () => {
+        retryHostConnection(connection)
       })
     }
 
@@ -151,12 +177,19 @@ function PeerProvider(props: PeerProviderProps) {
           return
         }
 
+        if (hasOpened && SIGNALING_RECOVERABLE_ERROR_TYPES.has(error.type)) {
+          scheduleSignalingReconnect(nextPeer)
+          return
+        }
+
         emit({ type: 'error', error })
         if (props.role !== 'guest' || error.type !== 'peer-unavailable') return
 
         const unavailableConnection = hostConnection
+        clearHostConnectionTimeout()
         hostConnection = null
         unavailableConnection?.close()
+        emit({ type: 'host-close' })
         scheduleGuestRetry()
       })
 
@@ -185,6 +218,12 @@ function PeerProvider(props: PeerProviderProps) {
           connections.delete(connectionId)
           emit({ type: 'guest-close', connectionId })
         })
+        connection.on('error', () => {
+          if (closed || connections.get(connectionId) !== connection) return
+          connections.delete(connectionId)
+          connection.close()
+          emit({ type: 'guest-close', connectionId })
+        })
       })
     }
 
@@ -211,6 +250,7 @@ function PeerProvider(props: PeerProviderProps) {
 
       closed = true
       if (guestRetryTimeout !== undefined) window.clearTimeout(guestRetryTimeout)
+      clearHostConnectionTimeout()
       if (hostStartRetryTimeout !== undefined) window.clearTimeout(hostStartRetryTimeout)
       if (signalingReconnectTimeout !== undefined) window.clearTimeout(signalingReconnectTimeout)
       shutdownPromise = new Promise<void>((resolve) => {
@@ -227,6 +267,7 @@ function PeerProvider(props: PeerProviderProps) {
     return () => {
       closed = true
       if (guestRetryTimeout !== undefined) window.clearTimeout(guestRetryTimeout)
+      clearHostConnectionTimeout()
       if (hostStartRetryTimeout !== undefined) window.clearTimeout(hostStartRetryTimeout)
       if (signalingReconnectTimeout !== undefined) window.clearTimeout(signalingReconnectTimeout)
       peer?.destroy()

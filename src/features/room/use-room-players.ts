@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePeer } from '@/features/peer/PeerProvider'
+import type { GameBottomElement } from '@/features/play/game-screen-configuration'
 import {
   parseClaimedPlayerId,
   parseGuestRoomMessage,
@@ -16,6 +17,7 @@ import {
 
 type RoomConnectionStatus = 'connecting' | 'connected' | 'room-closed' | 'error'
 const CONTROL_MESSAGE_TIMEOUT_MS = 4000
+const GUEST_JOIN_RETRY_DELAY_MS = 1000
 
 interface UseRoomPlayersOptions {
   onPlayerIdAssigned: (playerId: string) => void
@@ -26,6 +28,8 @@ interface UseRoomPlayersOptions {
 export function useRoomPlayers(options: UseRoomPlayersOptions) {
   const peer = usePeer()
   const [error, setError] = useState<Error | null>(null)
+  const [bottomElements, setBottomElementsState] = useState<GameBottomElement[]>([])
+  const [gameStarted, setGameStarted] = useState(options.session.gameStarted)
   const [localPlayerId, setLocalPlayerId] = useState<string | null>(
     options.session.role === 'host' ? options.session.playerId : options.session.playerId ?? null,
   )
@@ -42,6 +46,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
   const hostClosurePendingRef = useRef<Set<string> | null>(null)
   const hostClosingRef = useRef(false)
   const knownPlayerIdsByConnectionRef = useRef(new Map<string, Set<string>>())
+  const kickPlayerRef = useRef<(playerId: string) => Promise<void>>(async () => {})
   const hostPersistenceRef = useRef(Promise.resolve())
   const playerInfoPersistenceRef = useRef(Promise.resolve())
   const leavingRef = useRef(false)
@@ -49,12 +54,31 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
   const localPlayerRef = useRef(options.player)
   const playerInfoRef = useRef(new Map<string, PlayerInfo>())
   const playerInfoCacheReadyRef = useRef(false)
+  const roomHasConnectedRef = useRef(false)
   const sendGuestJoinRef = useRef<() => void>(() => {})
   const roomClosedRef = useRef(false)
+  const gameStartedRef = useRef(gameStarted)
+  const sessionRef = useRef(options.session)
+  const bottomElementsRef = useRef(bottomElements)
 
   assignedPlayerIdCallbackRef.current = options.onPlayerIdAssigned
   localPlayerIdRef.current = localPlayerId
   localPlayerRef.current = options.player
+  gameStartedRef.current = gameStarted
+  bottomElementsRef.current = bottomElements
+
+  function setGamePhase(nextGameStarted: boolean) {
+    setGameStarted(nextGameStarted)
+    const nextSession = { ...sessionRef.current, gameStarted: nextGameStarted }
+    sessionRef.current = nextSession
+    const save = options.session.role === 'host'
+      ? hostPersistenceRef.current.then(() => saveRoomSession(nextSession))
+      : saveRoomSession(nextSession)
+    if (options.session.role === 'host') hostPersistenceRef.current = save.catch(() => {})
+    void save.catch(() => {
+      setError(new Error('Unable to save the game state.'))
+    })
+  }
 
   function storePlayerInfo(playerId: string, player: PlayerInfo) {
     playerInfoRef.current.set(playerId, player)
@@ -70,25 +94,32 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
     let active = true
     playerInfoCacheReadyRef.current = false
 
-    void loadRoomPlayerInfo(options.session.roomCode).then((cachedPlayerInfo) => {
-      if (!active) return
+    void loadRoomPlayerInfo(options.session.roomCode)
+      .then((cachedPlayerInfo) => {
+        if (!active) return
 
-      Object.entries(cachedPlayerInfo).forEach(([playerId, player]) => {
-        if (!playerInfoRef.current.has(playerId)) playerInfoRef.current.set(playerId, player)
-      })
-      setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
-      playerInfoCacheReadyRef.current = true
-      if (options.session.role === 'host') {
-        knownPlayerIdsByConnectionRef.current.forEach((knownPlayerIds, connectionId) => {
-          playerInfoRef.current.forEach((player, playerId) => {
-            if (!knownPlayerIds.has(playerId)) {
-              peer.sendTo(connectionId, { type: 'player-info', player, playerId } satisfies HostRoomMessage)
-            }
-          })
+        Object.entries(cachedPlayerInfo).forEach(([playerId, player]) => {
+          if (!playerInfoRef.current.has(playerId)) playerInfoRef.current.set(playerId, player)
         })
-      }
-      sendGuestJoinRef.current()
-    })
+        setPlayerInfoById(Object.fromEntries(playerInfoRef.current))
+      })
+      .catch(() => {
+        // Cached player details improve reconnection, but must not block joining a room.
+      })
+      .finally(() => {
+        if (!active) return
+        playerInfoCacheReadyRef.current = true
+        if (options.session.role === 'host') {
+          knownPlayerIdsByConnectionRef.current.forEach((knownPlayerIds, connectionId) => {
+            playerInfoRef.current.forEach((player, playerId) => {
+              if (!knownPlayerIds.has(playerId)) {
+                peer.sendTo(connectionId, { type: 'player-info', player, playerId } satisfies HostRoomMessage)
+              }
+            })
+          })
+        }
+        sendGuestJoinRef.current()
+      })
 
     return () => {
       active = false
@@ -136,9 +167,10 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
 
       function persistAssignments() {
         const session = {
-          ...hostSession,
+          ...sessionRef.current,
           assignedPlayerIds: [...assignedPlayerIds],
         }
+        sessionRef.current = session
         const nextSave = hostPersistenceRef.current.then(() => saveRoomSession(session))
         hostPersistenceRef.current = nextSave.catch(() => {})
         return nextSave
@@ -205,6 +237,8 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         if (!active || !peer.isConnected(connectionId) || activePlayers.get(connectionId) !== playerId) return
         const joinedMessage: HostRoomMessage = { type: 'joined', playerId }
         peer.sendTo(connectionId, joinedMessage)
+        peer.sendTo(connectionId, { type: gameStartedRef.current ? 'game-start' : 'game-stop' } satisfies HostRoomMessage)
+        peer.sendTo(connectionId, { bottomElements: bottomElementsRef.current, type: 'game-screen-config' } satisfies HostRoomMessage)
         const pendingPlayer = pendingPlayerInfo.get(connectionId)
         if (pendingPlayer) {
           pendingPlayerInfo.delete(connectionId)
@@ -237,11 +271,24 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         return persistence
       }
 
+      async function kickPlayer(playerId: string) {
+        if (playerId === hostSession.playerId) return
+        const connectionId = playerConnections.get(playerId)
+        if (!connectionId) return
+
+        await removePlayer(connectionId, true)
+        peer.sendTo(connectionId, { type: 'kicked' } satisfies HostRoomMessage)
+      }
+
+      kickPlayerRef.current = kickPlayer
+
       const unsubscribe = peer.subscribe((event) => {
         if (!active) return
 
         if (event.type === 'peer-open') {
           setStatus('connected')
+          roomHasConnectedRef.current = true
+          setError(null)
           return
         }
         if (event.type === 'guest-open') {
@@ -254,6 +301,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         }
         if (event.type === 'error') {
           setError(event.error)
+          if (roomHasConnectedRef.current) return
           setStatus('error')
           return
         }
@@ -290,18 +338,40 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         active = false
         activeHostConnectionIdsRef.current.clear()
         knownPlayerIdsByConnectionRef.current.clear()
+        kickPlayerRef.current = async () => {}
         unsubscribe()
       }
     }
 
     let hostConnectionOpen = false
     let guestJoinSent = false
+    let guestJoinRetryTimeout: number | undefined
+
+    function clearGuestJoinRetry() {
+      if (guestJoinRetryTimeout === undefined) return
+      window.clearTimeout(guestJoinRetryTimeout)
+      guestJoinRetryTimeout = undefined
+    }
+
+    function hasCompletedGuestJoin() {
+      return localPlayerIdRef.current !== null && hasRosterRef.current
+    }
+
+    function scheduleGuestJoinRetry() {
+      if (!active || !hostConnectionOpen || hasCompletedGuestJoin() || guestJoinRetryTimeout !== undefined) return
+      guestJoinRetryTimeout = window.setTimeout(() => {
+        guestJoinRetryTimeout = undefined
+        guestJoinSent = false
+        sendGuestJoin()
+      }, GUEST_JOIN_RETRY_DELAY_MS)
+    }
 
     function sendGuestJoin() {
-      if (!hostConnectionOpen || !playerInfoCacheReadyRef.current || guestJoinSent) return
+      if (!hostConnectionOpen || !playerInfoCacheReadyRef.current || guestJoinSent || hasCompletedGuestJoin()) return
+      if (!peer.sendToHost({ type: 'join', knownPlayerIds: [...playerInfoRef.current.keys()] })) return
       guestJoinSent = true
-      peer.sendToHost({ type: 'join', knownPlayerIds: [...playerInfoRef.current.keys()] })
       peer.sendToHost({ type: 'player-info', player: localPlayerRef.current })
+      scheduleGuestJoinRetry()
     }
 
     sendGuestJoinRef.current = sendGuestJoin
@@ -310,6 +380,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
 
       if (event.type === 'host-open') {
         hostConnectionOpen = true
+        guestJoinSent = false
         setStatus('connecting')
         sendGuestJoin()
         return
@@ -317,6 +388,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
       if (event.type === 'host-close') {
         hostConnectionOpen = false
         guestJoinSent = false
+        clearGuestJoinRetry()
         hasRosterRef.current = false
         setPlayerIds([])
         setStatus('connecting')
@@ -334,11 +406,18 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         setLocalPlayerId(message.playerId)
         storePlayerInfo(message.playerId, localPlayerRef.current)
         assignedPlayerIdCallbackRef.current(message.playerId)
-        if (hasRosterRef.current) setStatus('connected')
-        void saveRoomSession({
-          ...options.session,
+        if (hasRosterRef.current) {
+          setStatus('connected')
+          roomHasConnectedRef.current = true
+          setError(null)
+        }
+        if (hasCompletedGuestJoin()) clearGuestJoinRetry()
+        const nextSession = {
+          ...sessionRef.current,
           playerId: message.playerId,
-        }).catch(() => {
+        }
+        sessionRef.current = nextSession
+        void saveRoomSession(nextSession).catch(() => {
           setError(new Error('Unable to save the assigned player ID.'))
         })
       } else if (message?.type === 'players-sync') {
@@ -346,12 +425,22 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
         setPlayerIds(message.playerIds)
         if (localPlayerIdRef.current) {
           setStatus('connected')
+          roomHasConnectedRef.current = true
+          setError(null)
         }
+        if (hasCompletedGuestJoin()) clearGuestJoinRetry()
       } else if (message?.type === 'player-info') {
         storePlayerInfo(message.playerId, message.player)
+      } else if (message?.type === 'game-start') {
+        setGamePhase(true)
+      } else if (message?.type === 'game-stop') {
+        setGamePhase(false)
+      } else if (message?.type === 'game-screen-config') {
+        bottomElementsRef.current = message.bottomElements
+        setBottomElementsState(message.bottomElements)
       } else if (message?.type === 'left') {
         guestLeaveAckRef.current?.()
-      } else if (message?.type === 'room-closed') {
+      } else if (message?.type === 'kicked' || message?.type === 'room-closed') {
         roomClosedRef.current = true
         hasRosterRef.current = false
         setPlayerIds([])
@@ -365,6 +454,7 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
 
     return () => {
       active = false
+      clearGuestJoinRetry()
       sendGuestJoinRef.current = () => {}
       unsubscribe()
     }
@@ -420,5 +510,33 @@ export function useRoomPlayers(options: UseRoomPlayersOptions) {
     await peer.shutdown()
   }
 
-  return { error, leaveRoom, localPlayerId, playerIds, playerInfoById, status }
+  async function kickPlayer(playerId: string) {
+    if (options.session.role !== 'host') return
+    await kickPlayerRef.current(playerId)
+  }
+
+  function startGame() {
+    if (options.session.role !== 'host') return
+    setGamePhase(true)
+    peer.broadcast({ type: 'game-start' } satisfies HostRoomMessage)
+  }
+
+  function returnToLobby() {
+    if (options.session.role === 'host') {
+      peer.broadcast({ type: 'game-stop' } satisfies HostRoomMessage)
+    }
+    setGamePhase(false)
+  }
+
+  function setBottomElements(nextBottomElements: GameBottomElement[]) {
+    if (options.session.role !== 'host') return
+    const uniqueBottomElements = nextBottomElements.filter((element, index, elements) => {
+      return elements.findIndex((candidate) => candidate.id === element.id) === index
+    })
+    bottomElementsRef.current = uniqueBottomElements
+    setBottomElementsState(uniqueBottomElements)
+    peer.broadcast({ bottomElements: uniqueBottomElements, type: 'game-screen-config' } satisfies HostRoomMessage)
+  }
+
+  return { bottomElements, error, gameStarted, kickPlayer, leaveRoom, localPlayerId, playerIds, playerInfoById, returnToLobby, setBottomElements, startGame, status }
 }

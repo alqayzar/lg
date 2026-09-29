@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { isRoomCode, normalizeRoomCode } from '@/features/room/room-code'
 
 interface JoinRoomDialogProps {
+  defaultRoomCode?: string
   disabled: boolean
   onJoin: (roomCode: string) => Promise<void>
 }
@@ -23,6 +24,10 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
   const [roomCode, setRoomCode] = useState('')
   const [scanError, setScanError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    if (!isOpen && props.defaultRoomCode) setRoomCode(props.defaultRoomCode)
+  }, [isOpen, props.defaultRoomCode])
 
   useEffect(() => {
     if (!isScanning || !videoRef.current) return
@@ -110,7 +115,7 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <Button
-        className="cartoon-press h-12 flex-1 rounded-xl border-2 border-[#08050f] [--element-color:#e6c65d] bg-[var(--element-color)] text-sm font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#f0d97d]"
+        className="cartoon-press h-13 rounded-2xl border-[var(--outline-color)] [--element-color:var(--paper)] text-sm font-black tracking-[0.05em] text-[var(--text-color)] uppercase hover:bg-[#fff8df]"
         disabled={props.disabled}
         onClick={openDialog}
         size="lg"
@@ -118,16 +123,16 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
       >
         Rejoindre
       </Button>
-      <DialogContent className="element-shadow border-2 border-[#08050f] [--element-color:#24212a] [--element-shadow-depth:8px] bg-[var(--element-color)] p-6 text-[#e7e0c8]">
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle className="text-[#e7e0c8]">{isScanning ? 'Scanner le QR code' : 'Rejoindre une partie'}</DialogTitle>
+          <DialogTitle className="text-[var(--text-color)]">{isScanning ? 'Scanner le QR code' : 'Rejoindre une partie'}</DialogTitle>
         </DialogHeader>
         {isScanning ? (
           <div className="space-y-4">
-            <video autoPlay className="aspect-square w-full rounded-xl border-2 border-[#08050f] bg-[#16151d] object-cover" muted playsInline ref={videoRef} />
-            {scanError && <p className="text-center text-sm font-medium text-[#df6542]" role="alert">{scanError}</p>}
+            <video autoPlay className="aspect-square w-full rounded-2xl border-4 border-[var(--outline-color)] bg-[var(--paper-muted)] object-cover" muted playsInline ref={videoRef} />
+            {scanError && <p className="text-center text-sm font-bold text-[#963f34]" role="alert">{scanError}</p>}
             <Button
-              className="cartoon-press h-11 w-full border-2 border-[#08050f] [--element-color:#e6c65d] bg-[var(--element-color)] font-bold text-[#16120d] hover:bg-[#f0d97d]"
+              className="cartoon-press h-12 w-full rounded-2xl border-[var(--outline-color)] [--element-color:var(--gold)] font-black text-[var(--text-color)] hover:bg-[#ffc95c]"
               onClick={closeScanner}
               type="button"
             >
@@ -141,7 +146,7 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
                 aria-label="Code de la partie"
                 autoCapitalize="characters"
                 autoComplete="off"
-                className="h-12 rounded-xl border-2 border-[#08050f] bg-[#16151d] px-4 pr-12 text-center font-mono text-base font-bold tracking-[0.2em] text-[#e7e0c8] placeholder:font-sans placeholder:font-normal placeholder:tracking-normal placeholder:text-[#aaa59a] focus-visible:ring-2 focus-visible:ring-[#e6c65d]"
+                 className="h-14 rounded-2xl border-4 border-[var(--outline-color)] bg-[var(--paper-muted)] px-4 pr-14 text-center font-mono text-base font-black tracking-[0.2em] text-[var(--text-color)] placeholder:font-sans placeholder:font-semibold placeholder:tracking-normal placeholder:text-[var(--muted-text-color)] focus-visible:ring-4 focus-visible:ring-[var(--cyan)]"
                 maxLength={7}
                 onChange={updateRoomCode}
                 placeholder="ABC-123"
@@ -151,7 +156,7 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
               />
               <Button
                 aria-label="Scanner un QR code"
-                className="element-shadow absolute top-1/2 right-1 size-10 -translate-y-1/2 border-2 border-[#08050f] [--element-color:#73cbd1] [--element-shadow-depth:2px] bg-[var(--element-color)] text-[#16120d] hover:bg-[#98dde0]"
+                 className="absolute top-1/2 right-1.5 size-10 -translate-y-1/2 rounded-xl border-[var(--outline-color)] bg-[var(--cyan)] text-[var(--text-color)] hover:brightness-105"
                 onClick={openScanner}
                 size="icon"
                 type="button"
@@ -160,13 +165,13 @@ export function JoinRoomDialog(props: JoinRoomDialogProps) {
               </Button>
             </div>
             <Button
-              className="cartoon-press h-11 w-full border-2 border-[#08050f] [--element-color:#df6542] bg-[var(--element-color)] font-bold tracking-[0.05em] text-[#16120d] uppercase hover:bg-[#ee7e57]"
+              className="cartoon-press h-12 w-full rounded-2xl border-[var(--outline-color)] [--element-color:var(--mint)] font-black tracking-[0.05em] text-[var(--text-color)] uppercase hover:bg-[#95e7df]"
               disabled={isJoining || !isRoomCode(roomCode)}
               type="submit"
             >
               {isJoining ? 'Connexion...' : 'Rejoindre'}
             </Button>
-            {joinError && <p className="text-center text-sm font-medium text-[#df6542]" role="alert">{joinError}</p>}
+            {joinError && <p className="text-center text-sm font-bold text-[#963f34]" role="alert">{joinError}</p>}
           </form>
         )}
       </DialogContent>

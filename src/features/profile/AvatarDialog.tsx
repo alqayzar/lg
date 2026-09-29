@@ -84,37 +84,37 @@ export function AvatarDialog(props: AvatarDialogProps) {
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
-      <DialogContent className="element-shadow border-2 border-[#08050f] [--element-color:#24212a] [--element-shadow-depth:8px] bg-[var(--element-color)] p-6 text-[#e7e0c8]">
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle className="text-[#e7e0c8]">Photo de profil</DialogTitle>
+          <DialogTitle className="text-[var(--text-color)]">Photo de profil</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3">
-          <Button className="uppercase cartoon-press cartoon-press-sm h-11 border-2 border-[#08050f] [--element-color:#16151d] bg-[var(--element-color)] text-[#e7e0c8] hover:bg-[#37323a]" disabled={isCompressingAvatar} onClick={openCameraPicker} type="button" variant="ghost">
+          <Button className="cartoon-press cartoon-press-sm h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--paper-muted)] font-bold text-[var(--text-color)] hover:bg-white" disabled={isCompressingAvatar} onClick={openCameraPicker} type="button" variant="ghost">
             <Camera aria-hidden="true" /> {isCompressingAvatar ? 'Compression...' : 'Prendre une photo'}
           </Button>
-          <Button className="uppercase cartoon-press cartoon-press-sm h-11 border-2 border-[#08050f] [--element-color:#16151d] bg-[var(--element-color)] text-[#e7e0c8] hover:bg-[#37323a]" disabled={isCompressingAvatar} onClick={openGalleryPicker} type="button" variant="ghost">
+          <Button className="cartoon-press cartoon-press-sm h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--paper-muted)] font-bold text-[var(--text-color)] hover:bg-white" disabled={isCompressingAvatar} onClick={openGalleryPicker} type="button" variant="ghost">
             <Image aria-hidden="true" /> {isCompressingAvatar ? 'Compression...' : 'Choisir dans la galerie'}
           </Button>
-        <Button className="uppercase cartoon-press h-11 border-2 border-[#08050f] [--element-color:#e6c65d] bg-[var(--element-color)] font-bold text-[#16120d] hover:bg-[#f0d97d]" disabled={isCompressingAvatar} onClick={openEmojiPicker} type="button">
+        <Button className="cartoon-press h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--gold)] font-black text-[var(--text-color)] hover:bg-[#ffc95c]" disabled={isCompressingAvatar} onClick={openEmojiPicker} type="button">
             <Smile aria-hidden="true" /> Utiliser un emoji
           </Button>
           {props.avatar && (
-            <Button className="uppercase cartoon-press h-11 border-2 border-[#08050f] [--element-color:#c95045] bg-[var(--element-color)] font-bold text-[#16120d] hover:bg-[#df675c]" disabled={isCompressingAvatar} onClick={removeAvatar} type="button">
+            <Button className="cartoon-press h-12 rounded-2xl border-[var(--outline-color)] [--element-color:var(--coral)] font-black text-[var(--text-color)] hover:bg-[#ff7885]" disabled={isCompressingAvatar} onClick={removeAvatar} type="button">
               <Trash2 aria-hidden="true" /> Supprimer l'image
             </Button>
           )}
-          {avatarError && <p className="text-center text-sm font-medium text-[#df6542]" role="alert">{avatarError}</p>}
+          {avatarError && <p className="text-center text-sm font-bold text-[#963f34]" role="alert">{avatarError}</p>}
         </div>
       </DialogContent>
 
       <Dialog open={isEmojiDialogOpen} onOpenChange={setIsEmojiDialogOpen}>
-        <DialogContent className="!flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] flex-col bg-[#24212a] p-6 text-[#e7e0c8] sm:max-w-md">
+        <DialogContent className="!flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-[#e7e0c8]">Choisir un emoji</DialogTitle>
+            <DialogTitle className="text-[var(--text-color)]">Choisir un emoji</DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-hidden rounded-xl border-2 border-[#08050f]">
-            <Suspense fallback={<div className="grid size-full place-items-center bg-[#16151d] text-sm font-bold text-[#aaa59a]">Chargement des emojis...</div>}>
-              <EmojiPicker emojiStyle={'native' as EmojiStyle} height="100%" onEmojiClick={selectEmoji} theme={'dark' as Theme} width="100%" />
+          <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border-4 border-[var(--outline-color)]">
+            <Suspense fallback={<div className="grid size-full place-items-center bg-[var(--paper-muted)] text-sm font-bold text-[var(--muted-text-color)]">Chargement des emojis...</div>}>
+              <EmojiPicker emojiStyle={'native' as EmojiStyle} height="100%" onEmojiClick={selectEmoji} theme={'light' as Theme} width="100%" />
             </Suspense>
           </div>
         </DialogContent>
